@@ -1,0 +1,28 @@
+# --- Flutter/Dart (qr_batch_scanner) ---
+**/doc/api/
+**/ios/Flutter/.last_build_id
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.pub-cache/
+**/.pub/
+**/build/
+qr_batch_scanner/windows/flutter/ephemeral/
+qr_batch_scanner/linux/flutter/ephemeral/
+qr_batch_scanner/macos/Flutter/ephemeral/
+*.iml
+*.ipr
+*.iws
+.idea/
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+
+# --- .NET (QrBackend) ---
+QrBackend/bin/
+QrBackend/obj/
+QrBackend/appsettings.json
+QrBackend/appsettings.Development.json
+QrBackend/output_result.jpg

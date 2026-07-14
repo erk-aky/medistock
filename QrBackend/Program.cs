@@ -204,6 +204,43 @@ app.MapPost("/api/qr/lookup", async (HttpRequest request, IConfiguration config)
     return Results.Ok(new { results = finalResults });
 });
 
+// Mobil uygulamanın offline SQLite'ının güncel olup olmadığını kontrol etmesi için.
+app.MapGet("/api/qr/db-version", async (IConfiguration config) =>
+{
+    var connStr = config.GetConnectionString("Default");
+    await using var conn = new NpgsqlConnection(connStr);
+    await conn.OpenAsync();
+
+    const string query = "SELECT id, started_at FROM sync_log WHERE status = 'success' ORDER BY started_at DESC LIMIT 1;";
+    await using var cmd = new NpgsqlCommand(query, conn);
+    await using var reader = await cmd.ExecuteReaderAsync();
+
+    if (!await reader.ReadAsync())
+        return Results.Ok(new { version = 0, updatedAt = (DateTimeOffset?)null });
+
+    return Results.Ok(new { version = reader.GetInt64(0), updatedAt = reader.GetFieldValue<DateTimeOffset>(1) });
+});
+
+// Mobil uygulamanın offline SQLite'ını yeniden doldurmak için tüm ilaç listesini döner.
+app.MapGet("/api/qr/db-export", async (IConfiguration config) =>
+{
+    var connStr = config.GetConnectionString("Default");
+    await using var conn = new NpgsqlConnection(connStr);
+    await conn.OpenAsync();
+
+    const string query = "SELECT barkod, urun_adi FROM qrcodes ORDER BY barkod;";
+    await using var cmd = new NpgsqlCommand(query, conn);
+    await using var reader = await cmd.ExecuteReaderAsync();
+
+    var rows = new List<object>();
+    while (await reader.ReadAsync())
+    {
+        rows.Add(new { barkod = reader.GetString(0), urunAdi = reader.IsDBNull(1) ? "" : reader.GetString(1) });
+    }
+
+    return Results.Ok(rows);
+});
+
 // --- YARDIMCI FONKSİYONLAR ---
 
 void ParseSegment(string s, ref string? serial, ref string? batch, ref DateTime? expiry)

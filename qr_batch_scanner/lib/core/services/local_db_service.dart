@@ -34,8 +34,24 @@ class LocalDbService {
       await File(path).writeAsBytes(bytes, flush: true);
     }
 
-    // Salt okunur modda açıyoruz (İlaç listesini sadece sorgulayacağız)
-    return await openDatabase(path, readOnly: true);
+    // Yazılabilir modda açıyoruz: backend senkronu ile içerik güncellenebilsin diye.
+    return await openDatabase(path);
+  }
+
+  /// Backend'den gelen güncel ilaç listesiyle tüm tabloyu tek bir transaction
+  /// içinde yeniden doldurur. İşlem yarıda kesilirse eski veri korunur.
+  Future<void> replaceAllData(List<Map<String, dynamic>> rows) async {
+    final db = await database;
+
+    await db.transaction((txn) async {
+      await txn.delete('filtreli_veriler');
+
+      final batch = txn.batch();
+      for (final row in rows) {
+        batch.insert('filtreli_veriler', row);
+      }
+      await batch.commit(noResult: true);
+    });
   }
 
   /// ✅ 13 haneli barkod ile sorgu yapan fonksiyon

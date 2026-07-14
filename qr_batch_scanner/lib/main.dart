@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // ✅ 1. EKLEME: Ekran kilitleme için gerekli
 import 'package:provider/provider.dart';
@@ -6,9 +8,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 // Import yollarını kendi proje yapına göre kontrol et:
 import 'features/auth/login_page.dart';
 import 'features/qr_scan/qr_scan_page.dart';
-import 'features/qr_scan/qr_scan_view_model.dart'; 
+import 'features/qr_scan/qr_scan_view_model.dart';
 import 'features/auth/auth_view_model.dart';
 import 'core/services/auth_service.dart';
+import 'core/services/db_sync_service.dart';
 import 'core/local/db_helper.dart';
 
 void main() async {
@@ -25,6 +28,9 @@ void main() async {
 
   // 🔹 OFFLINE SQLITE INIT
   await DBHelper.init();
+
+  // 🔹 İlaç veritabanını arka planda kontrol et/güncelle (uygulamayı bloklamaz)
+  unawaited(DbSyncService().checkAndUpdateIfNeeded());
 
   runApp(
     MultiProvider(

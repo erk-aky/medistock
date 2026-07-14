@@ -19,13 +19,32 @@ builder.Services.AddScoped<EmailService>();
 // YENİ: ItsService Kaydı eklendi
 builder.Services.AddScoped<IItsService, ItsService>(); 
 
-builder.Services.AddScoped<AuthService>(provider => 
+builder.Services.AddScoped<AuthService>(provider =>
 {
     var config = provider.GetRequiredService<IConfiguration>();
     var connString = config.GetConnectionString("Default") ?? "";
     var emailService = provider.GetRequiredService<EmailService>();
     return new AuthService(connString, emailService);
 });
+
+// --- TİTCK HAFTALIK SENKRON ---
+builder.Services.Configure<TitckSyncOptions>(builder.Configuration.GetSection("TitckSync"));
+builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection("Smtp"));
+
+builder.Services.AddHttpClient("titck");
+
+builder.Services.AddSingleton<TitckExcelDownloader>();
+builder.Services.AddSingleton<TitckExcelParser>();
+
+builder.Services.AddScoped<TitckSyncRepository>(provider =>
+{
+    var config = provider.GetRequiredService<IConfiguration>();
+    var connString = config.GetConnectionString("Default") ?? "";
+    return new TitckSyncRepository(connString);
+});
+
+builder.Services.AddSingleton<TitckSyncService>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<TitckSyncService>());
 
 builder.Services.AddCors(options =>
 {
@@ -220,6 +239,16 @@ void ParseSegment(string s, ref string? serial, ref string? batch, ref DateTime?
         string rest = s.Substring(idx + 2);
         batch = Regex.Split(rest, "17|21")[0];
     }
+}
+
+if (app.Environment.IsDevelopment())
+{
+    // Dev-only: haftalık TİTCK senkronunu bir hafta beklemeden manuel tetiklemek için
+    app.MapPost("/api/admin/titck-sync/run", async (TitckSyncService syncService) =>
+    {
+        var result = await syncService.RunOnceAsync(CancellationToken.None);
+        return Results.Ok(result);
+    });
 }
 
 app.MapControllers();

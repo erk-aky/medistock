@@ -4,5 +4,22 @@
   },
   "QrReader": {
     "ExePath": "C:\\path\\to\\Application.exe"
+  },
+  "TitckSync": {
+    "ListingPageUrl": "https://www.titck.gov.tr/dinamikmodul/85",
+    "DayOfWeek": "Monday",
+    "TimeOfDay": "03:00",
+    "AnomalyDropThresholdPercent": 20.0,
+    "UpdatePercentAnomalyThreshold": 30.0,
+    "NotifyEmail": "you@example.com",
+    "HttpTimeoutSeconds": 120
+  },
+  "Smtp": {
+    "Host": "smtp.gmail.com",
+    "Port": 587,
+    "FromName": "MediStock Support",
+    "FromAddress": "your-app-mail@example.com",
+    "Username": "your-app-mail@example.com",
+    "Password": "YOUR_APP_PASSWORD"
   }
 }

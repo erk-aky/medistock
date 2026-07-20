@@ -52,7 +52,7 @@ class _QrScanViewState extends State<_QrScanView> {
 
   void _initScanner() {
     // Eğer hali hazırda bir controller varsa temizlik yapıyoruz
-    // scannerController?.dispose(); 
+    // scannerController?.dispose();
 
     scannerController = MobileScannerController(
       detectionSpeed: DetectionSpeed.unrestricted,
@@ -60,12 +60,28 @@ class _QrScanViewState extends State<_QrScanView> {
       detectionTimeoutMs: 100,
       // ÖNEMLİ: Siyah/Mavi kutular için en hızlısı DataMatrix'e odaklanmaktır.
       // Eğer diğer modlarda QR okutman gerekiyorsa [BarcodeFormat.dataMatrix, BarcodeFormat.qrCode] yapabilirsin.
-      formats: [BarcodeFormat.dataMatrix, BarcodeFormat.qrCode], 
+      formats: [BarcodeFormat.dataMatrix, BarcodeFormat.qrCode],
       facing: CameraFacing.back,
       returnImage: false,
       // İşte o sihirli özellik:
-      invertImage: _isInvertedMode, 
+      invertImage: _isInvertedMode,
     );
+
+    // mobile_scanner, ekran yön kilidinden (SystemChrome.setPreferredOrientations)
+    // BAĞIMSIZ olarak telefonun ham sensöründen (OrientationEventListener) okuduğu
+    // yönü kullanıyor. Yani ekran dikeyde kilitli olsa bile, telefon 45 dereceden
+    // fazla döndürülünce controller "landscape" sanıp önizlemeyi yanlış eksende
+    // çiziyordu. Bunu telefonun fiziksel açısından tamamen bağımsız hale getirmek
+    // için controller'ın raporladığı yönü sürekli portraitUp'a sabitliyoruz.
+    scannerController.addListener(_lockScannerToPortrait);
+  }
+
+  void _lockScannerToPortrait() {
+    if (scannerController.value.deviceOrientation != DeviceOrientation.portraitUp) {
+      scannerController.value = scannerController.value.copyWith(
+        deviceOrientation: DeviceOrientation.portraitUp,
+      );
+    }
   }
 
 
@@ -316,12 +332,12 @@ class _QrScanViewState extends State<_QrScanView> {
   }
 
   Future<bool?> _openLiveScanner({String mode = 'normal'}) async {
-    // 1. Ekran yön kilidini serbest bırak
+    // Kamera ekranını dikeyde kilitli tut: telefon 45 derecenin üzerinde
+    // döndüğünde mobile_scanner yön hesaplaması bozulup görüntüyü yanlış
+    // eksende (yatayı dikeymiş gibi) basıyor. Dönüşe izin vermeyerek
+    // bu hesaplamanın hiç tetiklenmesini engelliyoruz.
     await SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
-      DeviceOrientation.portraitDown,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
     ]);
 
     // Yeni bir tarama oturumu başlat (Eski çizimleri temizle)

@@ -9,28 +9,32 @@ import 'local_db_service.dart';
 class DbSyncService {
   final LocalDbService _localDb = LocalDbService();
 
-  /// Uygulama açılışında çağrılır. Hiçbir hata dışarı fırlatmaz —
-  /// internet yoksa veya backend'e ulaşılamıyorsa sessizce vazgeçer,
-  /// mevcut offline veri olduğu gibi kalır.
-  Future<void> checkAndUpdateIfNeeded() async {
+  /// Telefonda kayıtlı olan versiyon numarası (hiç senkron olmadıysa 0).
+  Future<int> getLocalVersion() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt('localDbVersion') ?? 0;
+  }
+
+  /// Backend'deki güncel versiyon numarasını döner, backend'e hiç
+  /// ulaşılamıyorsa (internet yok / sunucu kapalı) `null` döner.
+  Future<int?> getRemoteVersionOrNull() async {
     try {
-      final remoteVersion = await _fetchRemoteVersion();
-      final prefs = await SharedPreferences.getInstance();
-      final localVersion = prefs.getInt('localDbVersion') ?? 0;
-
-      if (remoteVersion <= localVersion) {
-        print("DbSyncService: yerel veritabanı zaten güncel (v$localVersion).");
-        return;
-      }
-
-      print("DbSyncService: yeni sürüm bulundu (v$localVersion -> v$remoteVersion), indiriliyor...");
-      final rows = await _fetchAllDrugs();
-      await _localDb.replaceAllData(rows);
-      await prefs.setInt('localDbVersion', remoteVersion);
-      print("DbSyncService: yerel veritabanı güncellendi (${rows.length} satır).");
+      return await _fetchRemoteVersion();
     } catch (e) {
-      print("DbSyncService: güncelleme atlandı ($e)");
+      print("DbSyncService: versiyon bilgisi alınamadı ($e)");
+      return null;
     }
+  }
+
+  /// Backend'den tüm ilaç listesini indirip yerel `ilaclar.db`'ye yazar ve
+  /// kayıtlı versiyonu günceller. Başarısız olursa exception fırlatır —
+  /// çağıran taraf bunu yakalayıp kullanıcıyı bilgilendirmeli.
+  Future<void> downloadAndApplyUpdate(int remoteVersion) async {
+    final rows = await _fetchAllDrugs();
+    await _localDb.replaceAllData(rows);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('localDbVersion', remoteVersion);
+    print("DbSyncService: yerel veritabanı güncellendi (${rows.length} satır, v$remoteVersion).");
   }
 
   Future<int> _fetchRemoteVersion() async {

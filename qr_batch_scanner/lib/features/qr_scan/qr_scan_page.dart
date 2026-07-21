@@ -17,6 +17,10 @@ import '../auth/auth_view_model.dart';
 
 enum TimeFilterPreset { all, last1Hour, today, yesterday }
 
+// Kamera tarama rengi modu: sırasıyla normal -> invert -> hybrid -> normal
+// şeklinde döngüye giriyor (mod değiştirme butonu ile).
+enum _ScanColorMode { normal, inverted, hybrid }
+
 class QrScanPage extends StatelessWidget {
   const QrScanPage({super.key});
 
@@ -47,7 +51,7 @@ class _QrScanViewState extends State<_QrScanView> {
   // class _QrScanPageState extends State<QrScanPage> {  satırının hemen altına:
   // Sınıfın en üstünde, diğer değişkenlerin yanında:
   late MobileScannerController scannerController;
-  bool _isInvertedMode = false; 
+  _ScanColorMode _colorMode = _ScanColorMode.normal;
   bool _isCameraRefreshing = false; // BU SATIRI EKLE (Sayfayı yenilemek için kullanacağız)
 
   void _initScanner() {
@@ -64,7 +68,10 @@ class _QrScanViewState extends State<_QrScanView> {
       facing: CameraFacing.back,
       returnImage: false,
       // İşte o sihirli özellik:
-      invertImage: _isInvertedMode,
+      invertImage: _colorMode == _ScanColorMode.inverted,
+      // Hibrit modda kamera yeniden başlatılmadan her karede normal/ters
+      // tarama alterne edilir (native tarafta uygulanan yama, bkz. packages/mobile_scanner).
+      hybridMode: _colorMode == _ScanColorMode.hybrid,
     );
 
     // mobile_scanner, ekran yön kilidinden (SystemChrome.setPreferredOrientations)
@@ -74,6 +81,56 @@ class _QrScanViewState extends State<_QrScanView> {
     // çiziyordu. Bunu telefonun fiziksel açısından tamamen bağımsız hale getirmek
     // için controller'ın raporladığı yönü sürekli portraitUp'a sabitliyoruz.
     scannerController.addListener(_lockScannerToPortrait);
+  }
+
+  // Mod değiştirme butonunun görseli: normal (düz gri), invert (düz turuncu)
+  // ve hybrid (dikeyden ikiye bölünmüş, yarısı gri yarısı turuncu) durumlarını
+  // ayırt eder. ClipOval + Row kullanımı statik bir çizim olduğundan
+  // (animasyon yok) ekstra bir CustomPainter'a gerek bırakmaz.
+  Widget _buildColorModeAvatar(_ScanColorMode mode) {
+    const double size = 50;
+    Widget background;
+    switch (mode) {
+      case _ScanColorMode.normal:
+        background = Container(color: Colors.black54);
+      case _ScanColorMode.inverted:
+        background = Container(color: Colors.orangeAccent);
+      case _ScanColorMode.hybrid:
+        background = const Row(
+          children: [
+            Expanded(child: ColoredBox(color: Colors.black54)),
+            Expanded(child: ColoredBox(color: Colors.orangeAccent)),
+          ],
+        );
+    }
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          ClipOval(child: background),
+          Icon(
+            mode == _ScanColorMode.normal
+                ? Icons.brightness_6_outlined
+                : Icons.brightness_6,
+            color: Colors.white,
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _colorModeHintText(_ScanColorMode mode) {
+    switch (mode) {
+      case _ScanColorMode.normal:
+        return "Beyaz zemindeki karekodu okutun.";
+      case _ScanColorMode.inverted:
+        return "Siyah zemindeki karekodu okutun.";
+      case _ScanColorMode.hybrid:
+        return "Siyah veya beyaz zemindeki karekodu okutun.";
+    }
   }
 
   void _lockScannerToPortrait() {
@@ -383,7 +440,7 @@ class _QrScanViewState extends State<_QrScanView> {
                     // --- 1. KAMERA KATMANI ---
                     if (!isCameraRefreshing)
                       MobileScanner(
-                        key: ValueKey('scanner_${_isInvertedMode}_${scannerController.hashCode}'),
+                        key: ValueKey('scanner_${_colorMode}_${scannerController.hashCode}'),
                         fit: BoxFit.fitHeight,
                         controller: scannerController,
                       placeholderBuilder: (context) => Container(color: Colors.black),
@@ -491,7 +548,9 @@ class _QrScanViewState extends State<_QrScanView> {
                             isCameraRefreshing = true;
                           });
 
-                          _isInvertedMode = !_isInvertedMode; 
+                          // Döngü: normal -> invert -> hybrid -> normal ...
+                          _colorMode = _ScanColorMode.values[
+                              (_colorMode.index + 1) % _ScanColorMode.values.length];
 
                           // 2. Widget tree'nin güncellenip eski controller'ı dinleyen widget'ları sökmesi için çok kısa bir bekleme yapıyoruz. 
                           // Bu bekleme dispose() çağrısına bağlı 'kırmızı hata ekranını' kesinlikle çözecek.
@@ -518,11 +577,7 @@ class _QrScanViewState extends State<_QrScanView> {
                             });
                           }
                         },
-                        child: CircleAvatar(
-                          backgroundColor: _isInvertedMode ? Colors.orangeAccent : Colors.black54,
-                          radius: 25,
-                          child: Icon(_isInvertedMode ? Icons.brightness_6 : Icons.brightness_6_outlined, color: Colors.white),
-                        ),
+                        child: _buildColorModeAvatar(_colorMode),
                       ),
                     ),
 
@@ -589,7 +644,7 @@ class _QrScanViewState extends State<_QrScanView> {
                                       ? "Lütfen sorgulanacak ürünü kameraya gösterin."
                                       : (vm.isComparisonMode 
                                           ? "Kutuları okutun. Eşleşmeyenler kırmızı yanar." 
-                                          : "Karekodu kameraya gösterin.\n${_isInvertedMode ? "Siyah zemindeki karekodu okutun." : "Beyaz zemindeki karekodu okutun."}"),
+                                          : "Karekodu kameraya gösterin.\n${_colorModeHintText(_colorMode)}"),
                                   textAlign: TextAlign.center,
                                   style: const TextStyle(color: Colors.white, fontSize: 12), // ✅ biraz küçültüldü
                                 ),

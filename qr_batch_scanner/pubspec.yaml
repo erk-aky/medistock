@@ -63,6 +63,14 @@ dependencies:
   # pubspec.yaml -> dependencies:
 
 
+# mobile_scanner'ın Android tarafı, hibrit (kare bazlı normal/ters alterne)
+# tarama moduna izin veren küçük bir yama ile burada vendor edilmiştir.
+# packages/mobile_scanner/android/.../MobileScanner.kt içindeki hybridMode
+# desteğine bakınız.
+dependency_overrides:
+  mobile_scanner:
+    path: packages/mobile_scanner
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

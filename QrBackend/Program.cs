@@ -46,16 +46,7 @@ builder.Services.AddScoped<TitckSyncRepository>(provider =>
 builder.Services.AddSingleton<TitckSyncService>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<TitckSyncService>());
 
-builder.Services.AddCors(options =>
-{
-    options.AddDefaultPolicy(policy =>
-        policy.AllowAnyOrigin()
-              .AllowAnyHeader()
-              .AllowAnyMethod());
-});
-
 var app = builder.Build();
-app.UseCors();
 
 // --- ENDPOINTLER ---
 app.MapGet("/", () => "Backend JSON Modunda Calisiyor");

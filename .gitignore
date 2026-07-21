@@ -26,3 +26,4 @@ QrBackend/obj/
 QrBackend/appsettings.json
 QrBackend/appsettings.Development.json
 QrBackend/output_result.jpg
+QrBackend/publish_output/

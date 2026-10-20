@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/constants/validation_constants.dart';
 import '../../../core/services/auth_service.dart';
 
 class ForgotPasswordPage extends StatefulWidget {
@@ -45,6 +46,10 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   // Aşama 2: Kodu ve Yeni Şifreyi Onayla
   Future<void> _resetPassword() async {
     if (_codeController.text.isEmpty || _newPasswordController.text.isEmpty) return;
+    if (_newPasswordController.text.trim().length < minPasswordLength) {
+      _showMsg('Şifre en az $minPasswordLength karakter olmalıdır', isError: true);
+      return;
+    }
     setState(() => _isLoading = true);
     try {
       await _authService.resetPassword(

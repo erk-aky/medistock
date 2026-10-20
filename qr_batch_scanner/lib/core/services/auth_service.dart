@@ -9,11 +9,11 @@ class AuthService {
 
   /// ✅ YENİ: E-posta Doğrulama Kodunu Backend'e Gönderir
   /// POST /api/auth/verify-email
-  Future<Map<String, dynamic>> verifyEmail(String email, String code) async {
+  Future<Map<String, dynamic>> verifyEmail(String ticket, String code) async {
     final uri = Uri.parse('${ApiConstants.baseUrl}/api/auth/verify-email');
-    
+
     final bodyJson = jsonEncode({
-      'email': email,
+      'ticket': ticket,
       'code': code,
     });
 

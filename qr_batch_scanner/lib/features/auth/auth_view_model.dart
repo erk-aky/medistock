@@ -39,6 +39,8 @@ class AuthViewModel extends ChangeNotifier {
   String? _trialEndDate;
   String? get trialEndDate => _trialEndDate;
 
+  String? _registrationTicket;
+
   static const _keyLoggedIn = 'isLoggedIn';
   static const _keyUsername = 'username';
   static const _keyEmail = 'userEmail'; 
@@ -63,15 +65,16 @@ class AuthViewModel extends ChangeNotifier {
   }
 
   /// ✅ YENİ: E-posta doğrulama kodunu gönderir
-  Future<bool> verifyCode(String email, String code) async {
+  Future<bool> verifyCode(String code) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
 
     try {
-      final resp = await _authService.verifyEmail(email, code);
+      final resp = await _authService.verifyEmail(_registrationTicket ?? '', code);
       _isLoading = false;
       if (resp['success'] == true) {
+        _registrationTicket = null;
         notifyListeners();
         return true;
       } else {
@@ -285,6 +288,7 @@ class AuthViewModel extends ChangeNotifier {
     try {
       final resp = await _authService.register(username, email, password);
       if (resp['success'] == true) {
+        _registrationTicket = resp['ticket']?.toString();
         _isLoading = false;
         notifyListeners();
         return true;

@@ -50,7 +50,7 @@ namespace QrBackend.Controllers
         {
             try
             {
-                var result = await _authService.VerifyEmailAsync(request.Email, request.Code);
+                var result = await _authService.VerifyEmailAsync(request.Ticket, request.Code);
                 
                 if (result.Success)
                 {
@@ -113,7 +113,7 @@ namespace QrBackend.Controllers
 
                 if (result.Success)
                 {
-                    return Ok(new { success = true, message = result.Message });
+                    return Ok(new { success = true, message = result.Message, ticket = result.Ticket });
                 }
 
                 return BadRequest(new { success = false, message = result.Message });
@@ -171,7 +171,7 @@ namespace QrBackend.Controllers
     // ✅ YENİ: Doğrulama isteği için model
     public class VerifyEmailRequest
     {
-        public string Email { get; set; } = string.Empty;
+        public string Ticket { get; set; } = string.Empty;
         public string Code { get; set; } = string.Empty;
     }
 

@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../core/constants/validation_constants.dart';
 import 'auth_view_model.dart';
 
 class RegisterPage extends StatefulWidget {
@@ -22,8 +24,15 @@ class _RegisterPageState extends State<RegisterPage> {
   // Sayfa Durumu: false ise Kayıt, true ise Onay ekranı
   bool _showVerifyStep = false;
 
+  static const int _maxResends = 3;
+  static const int _cooldownSeconds = 60;
+  int _resendCount = 0;
+  int _cooldownLeft = 0;
+  Timer? _cooldownTimer;
+
   @override
   void dispose() {
+    _cooldownTimer?.cancel();
     _usernameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
@@ -44,6 +53,8 @@ class _RegisterPageState extends State<RegisterPage> {
 
     if (mounted) {
       if (success) {
+        _codeController.clear();
+        _startCooldown();
         setState(() => _showVerifyStep = true); // Onay ekranına geç
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -63,10 +74,7 @@ class _RegisterPageState extends State<RegisterPage> {
     if (!_verifyFormKey.currentState!.validate()) return;
 
     final viewModel = context.read<AuthViewModel>();
-    final success = await viewModel.verifyCode(
-      _emailController.text.trim(),
-      _codeController.text.trim(),
-    );
+    final success = await viewModel.verifyCode(_codeController.text.trim());
 
     if (mounted) {
       if (success) {
@@ -82,6 +90,48 @@ class _RegisterPageState extends State<RegisterPage> {
         _showError(viewModel.error ?? 'Kod hatalı veya süresi dolmuş');
       }
     }
+  }
+
+  // Aynı bilgilerle yeni kod ister, önceki kod geçersiz olur ve bir hak düşer
+  Future<void> _handleResend() async {
+    if (_resendCount >= _maxResends || _cooldownLeft > 0) return;
+
+    final viewModel = context.read<AuthViewModel>();
+    final success = await viewModel.register(
+      _usernameController.text.trim(),
+      _emailController.text.trim(),
+      _passwordController.text.trim(),
+    );
+
+    if (!mounted) return;
+    if (success) {
+      _codeController.clear();
+      setState(() => _resendCount++);
+      _startCooldown();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Yeni kod gönderildi, önceki kod artık geçersiz.'),
+          backgroundColor: Colors.green,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } else {
+      _showError(viewModel.error ?? 'Kod gönderilemedi');
+    }
+  }
+
+  // Tekrar gönder butonu için 60 saniyelik geri sayımı başlatır
+  void _startCooldown() {
+    _cooldownTimer?.cancel();
+    setState(() => _cooldownLeft = _cooldownSeconds);
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() => _cooldownLeft--);
+      if (_cooldownLeft <= 0) timer.cancel();
+    });
   }
 
   void _showError(String message) {
@@ -192,7 +242,9 @@ class _RegisterPageState extends State<RegisterPage> {
                 text: 'Kodu Doğrula',
                 isLoading: viewModel.isLoading,
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
+              _buildResendButton(viewModel.isLoading),
+              const SizedBox(height: 8),
               TextButton(
                 onPressed: () => setState(() => _showVerifyStep = false),
                 child: const Text("Bilgileri Düzenle / Geri Dön", style: TextStyle(color: Colors.grey)),
@@ -201,6 +253,27 @@ class _RegisterPageState extends State<RegisterPage> {
           ),
         ),
       ],
+    );
+  }
+
+  // Kalan hakka ve geri sayıma göre tekrar gönder butonunu çizer
+  Widget _buildResendButton(bool isLoading) {
+    if (_resendCount >= _maxResends) {
+      return const Text(
+        'Başka hakkınız bulunmamaktadır.',
+        textAlign: TextAlign.center,
+        style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w600),
+      );
+    }
+
+    final remaining = _maxResends - _resendCount;
+    final text = _cooldownLeft > 0
+        ? 'Kodu tekrar gönder ($_cooldownLeft sn)'
+        : 'Kodu tekrar gönder (kalan hak: $remaining)';
+
+    return TextButton(
+      onPressed: (isLoading || _cooldownLeft > 0) ? null : _handleResend,
+      child: Text(text, style: const TextStyle(fontWeight: FontWeight.w600)),
     );
   }
 
@@ -261,7 +334,7 @@ class _RegisterPageState extends State<RegisterPage> {
       validator: (v) {
         if (v!.isEmpty) return '$label gerekli';
         if (isEmail && !v.contains('@')) return 'Geçerli bir e-posta girin';
-        if (isPassword && v.length < 4) return 'Şifre çok kısa';
+        if (isPassword && v.length < minPasswordLength) return 'Şifre en az $minPasswordLength karakter olmalıdır';
         return null;
       },
     );

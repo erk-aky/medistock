@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Npgsql;
 using System.Diagnostics;
@@ -18,12 +19,18 @@ builder.Services.AddScoped<EmailService>();
 // YENİ: ItsService Kaydı eklendi
 builder.Services.AddScoped<IItsService, ItsService>(); 
 
+builder.Services.AddDataProtection().SetApplicationName("QrBackend");
+builder.Services.AddSingleton<RegistrationTicketService>();
+builder.Services.AddSingleton<EmailCooldown>();
+
 builder.Services.AddScoped<AuthService>(provider =>
 {
     var config = provider.GetRequiredService<IConfiguration>();
     var connString = config.GetConnectionString("Default") ?? "";
     var emailService = provider.GetRequiredService<EmailService>();
-    return new AuthService(connString, emailService);
+    var ticketService = provider.GetRequiredService<RegistrationTicketService>();
+    var emailCooldown = provider.GetRequiredService<EmailCooldown>();
+    return new AuthService(connString, emailService, ticketService, emailCooldown);
 });
 
 // --- TİTCK HAFTALIK SENKRON ---

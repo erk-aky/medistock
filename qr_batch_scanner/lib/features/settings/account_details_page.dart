@@ -106,8 +106,8 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
 
   // 🔥 KRİTİK GÜNCELLEME BURADA
   Future<void> _handleUpdate() async {
-    if (_glnController.text.isNotEmpty && _glnController.text.length != 17) {
-      _showSnackBar("GLN numarası tam 17 hane olmalıdır!", Colors.orange);
+    if (_glnController.text.isNotEmpty && _glnController.text.length != 13) {
+      _showSnackBar("GLN numarası tam 13 hane olmalıdır!", Colors.orange);
       return;
     }
 
@@ -124,8 +124,6 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
 
     try {
       // 1. Önce SharedPreferences'a kaydet ve 'await' ile bittiğinden emin ol
-      await prefs.setString('local_username_$userIdStr', _usernameController.text);
-      await prefs.setString('local_email_$userIdStr', _emailController.text);
       await prefs.setString('local_gln_$userIdStr', _glnController.text);
       await prefs.setString('local_its_password_$userIdStr', _itsPasswordController.text);
 
@@ -138,6 +136,9 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
       );
 
       if (success && mounted) {
+        await prefs.setString('local_username_$userIdStr', _usernameController.text);
+        await prefs.setString('local_email_$userIdStr', _emailController.text);
+
         // 3. ViewModel içindeki username'i manuel güncelle (404 hatasını önlemek için)
         // Eğer AuthViewModel içinde set metodu yoksa authVm.fetchAndUpdateProfile doğrudan çağrılır
         
@@ -259,11 +260,11 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
                     controller: _glnController,
                     label: "GLN Numarası",
                     icon: Icons.numbers_rounded,
-                    hint: "17 Haneli GLN giriniz",
+                    hint: "13 Haneli GLN giriniz",
                     keyboardType: TextInputType.number,
                     formatters: [
                       FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(17),
+                      LengthLimitingTextInputFormatter(13),
                     ],
                   ),
                   const SizedBox(height: 20),

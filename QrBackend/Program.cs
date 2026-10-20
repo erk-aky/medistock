@@ -7,7 +7,6 @@ using System.IO;
 using System.Linq;
 using System.Collections.Generic;
 using System.Net.Sockets;
-using System.Text.RegularExpressions; // Regex için eklendi
 using QrBackend.Services; // Senin orijinal namespace'in
 using QrBackend.Models;   // Senin orijinal namespace'in
 
@@ -125,30 +124,8 @@ app.MapPost("/api/qr/lookup", async (HttpRequest request, IConfiguration config)
 
         foreach (var det in detections)
         {
-            // --- FLUTTER'DAKİ AYNI PARÇALAMA MANTIĞI ---
-            string v = det.Value.Replace(((char)29).ToString(), " ");
-            var segments = v.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries).ToList();
-
-            string? gtin = null, serial = null, batch = null;
-            DateTime? expiry = null;
-
-            foreach (var segment in segments)
-            {
-                if (segment.StartsWith("01") && segment.Length >= 16)
-                {
-                    string fullGtin = segment.Substring(2, 14);
-                    gtin = fullGtin.StartsWith("0") ? fullGtin.Substring(1) : fullGtin;
-
-                    if (segment.Length > 16)
-                    {
-                        ParseSegment(segment.Substring(16), ref serial, ref batch, ref expiry);
-                    }
-                }
-                else
-                {
-                    ParseSegment(segment, ref serial, ref batch, ref expiry);
-                }
-            }
+            var parsed = Gs1Parser.Parse(det.Value);
+            var gtin = parsed.Gtin;
 
             // --- YENİ DB SORGUSU (Sadece GTIN ile) ---
             string? productName = null;
@@ -178,9 +155,9 @@ app.MapPost("/api/qr/lookup", async (HttpRequest request, IConfiguration config)
                 found = foundInDb,
                 data = new {
                     gtin = gtin,
-                    serialNo = serial,
-                    batchNo = batch,
-                    expiryDate = expiry?.ToString("yyyy-MM-dd"),
+                    serialNo = parsed.SerialNo,
+                    batchNo = parsed.BatchNo,
+                    expiryDate = parsed.ExpiryDate?.ToString("yyyy-MM-dd"),
                     productName = productName
                 },
                 x = det.X, y = det.Y, w = det.W, h = det.H 
@@ -231,43 +208,6 @@ app.MapGet("/api/qr/db-export", async (IConfiguration config) =>
 
     return Results.Ok(rows);
 });
-
-// --- YARDIMCI FONKSİYONLAR ---
-
-void ParseSegment(string s, ref string? serial, ref string? batch, ref DateTime? expiry)
-{
-    // Son Kullanma (17)
-    if (s.Contains("17"))
-    {
-        int idx = s.IndexOf("17");
-        if (s.Length >= idx + 8)
-        {
-            string datePart = s.Substring(idx + 2, 6);
-            if (Regex.IsMatch(datePart, @"^\d{6}$"))
-            {
-                int yy = int.Parse(datePart.Substring(0, 2));
-                int mm = int.Parse(datePart.Substring(2, 2));
-                int dd = int.Parse(datePart.Substring(4, 2));
-                if (mm >= 1 && mm <= 12)
-                    expiry = new DateTime(2000 + yy, mm, dd == 0 ? 1 : dd);
-            }
-        }
-    }
-    // Seri No (21)
-    if (s.Contains("21"))
-    {
-        int idx = s.IndexOf("21");
-        string rest = s.Substring(idx + 2);
-        serial = Regex.Split(rest, "17|10")[0];
-    }
-    // Parti No (10)
-    if (s.Contains("10"))
-    {
-        int idx = s.IndexOf("10");
-        string rest = s.Substring(idx + 2);
-        batch = Regex.Split(rest, "17|21")[0];
-    }
-}
 
 if (app.Environment.IsDevelopment())
 {

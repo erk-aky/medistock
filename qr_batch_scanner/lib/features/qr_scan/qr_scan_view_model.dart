@@ -14,6 +14,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../core/gs1/gs1_parser.dart';
 import '../../core/models/qr_lookup_result.dart';
 import '../../core/services/qr_service.dart';
 import '../../core/services/qr_mlkit_service.dart';
@@ -1098,23 +1099,16 @@ class QrScanViewModel extends ChangeNotifier {
 
   Future<QrLookupResult> _valueToQrResult(String v, Rect rect) async {
     String originalV = v;
-    v = v.replaceAll(String.fromCharCode(29), ' ');
-    List<String> segments = v.split(' ').where((s) => s.isNotEmpty).toList();
+    final parsed = Gs1Parser.parse(v);
 
-    String? drugName, gtin, serial, batch;
-    DateTime? expiry;
-
-    for (String segment in segments) {
-      processSegment(segment, (g, s, b, e) {
-        if (g != null) gtin = g;
-        if (s != null) serial = s;
-        if (b != null) batch = b;
-        if (e != null) expiry = e;
-      });
-    }
+    String? drugName;
+    final gtin = parsed.gtin;
+    final serial = parsed.serialNo;
+    final batch = parsed.batchNo;
+    final expiry = parsed.expiryDate;
 
     if (gtin != null) {
-      final drugFromLib = await _localDbService.findDrugByBarcode(gtin!);
+      final drugFromLib = await _localDbService.findDrugByBarcode(gtin);
       if (drugFromLib != null) {
         drugName = (drugFromLib['ÜRÜN ADI'] ?? drugFromLib['URUN_ADI'])?.toString();
       }
@@ -1138,84 +1132,8 @@ class QrScanViewModel extends ChangeNotifier {
     );
   }
 
-  void processSegment(String s, Function(String?, String?, String?, DateTime?) onFound) {
-    // 1. Temizleme: Görünmez GS (ASCII 29) karakterlerini belirgin bir ayırıcıya (|) çeviriyoruz
-    // Bazı tarayıcılar bunu boşluk olarak da verebilir.
-    String work = s.replaceAll('\x1D', '|').trim();
-
-    while (work.length >= 2) {
-      if (work.startsWith('01') && work.length >= 16) {
-        // --- GTIN (Sabit 14 Hane) ---
-        String gtinPart = work.substring(2, 16);
-        String cleanGtin = gtinPart.startsWith('0') ? gtinPart.substring(1) : gtinPart;
-        onFound(cleanGtin, null, null, null);
-        work = work.substring(16);
-      } 
-      else if (work.startsWith('17') && work.length >= 8) {
-        // --- SKT (Sabit 6 Hane: YYMMDD) ---
-        String datePart = work.substring(2, 8);
-        try {
-          int yy = int.parse(datePart.substring(0, 2));
-          int mm = int.parse(datePart.substring(2, 4));
-          int dd = int.parse(datePart.substring(4, 6));
-          if (mm >= 1 && mm <= 12) {
-            onFound(null, null, null, DateTime(2000 + yy, mm, dd == 0 ? 1 : dd));
-          }
-        } catch (_) {}
-        work = work.substring(8);
-      } 
-      else if (work.startsWith('21')) {
-        // --- SERİ NO (Değişken Uzunluk - Max 20) ---
-        work = work.substring(2);
-        // Ayırıcıya kadar veya diğer AI (17 veya 10) başlangıcına kadar oku
-        int end = _findVariableEnd(work);
-        String sn = work.substring(0, end).replaceAll('|', '');
-        onFound(null, sn, null, null);
-        work = work.substring(end);
-      } 
-      else if (work.startsWith('10')) {
-        // --- LOT / PARTİ NO (Değişken Uzunluk - Max 20) ---
-        work = work.substring(2);
-        int end = _findVariableEnd(work);
-        String lot = work.substring(0, end).replaceAll('|', '');
-        onFound(null, null, lot, null);
-        work = work.substring(end);
-      } 
-      else {
-        // Tanınmayan bir karakter varsa bir adım atla
-        work = work.substring(1);
-      }
-    }
-  }
-
-  // Değişken uzunluklu alanların (21 ve 10) nerede bittiğini bulan yardımcı fonksiyon
-  int _findVariableEnd(String s) {
-    // 1. Eğer içinde ayırıcı (| veya ASCII 29) varsa oraya kadar al
-    int sepIndex = s.indexOf('|');
-
-    // 2. Ayırıcı yoksa yalnızca 17 (SKT) AI'ını ara — seri no'dan sonra gelen sabit alan.
-    // next10 araması yapılmıyor: AI 10 (parti no) karekodun son alanıdır ve
-    // "10" alt dizisi parti no değerinin içinde geçebileceğinden yanlış bölünmeye yol açar.
-    int next17 = s.indexOf('17');
-
-    List<int> indexes = [];
-    if (sepIndex != -1) indexes.add(sepIndex);
-    if (next17 != -1 && next17 > 3) indexes.add(next17); // En az 3 karakter SN olmalı
-
-    if (indexes.isEmpty) return s.length; // Hiçbir şey yoksa sonuna kadar al
-
-    // Bulunan en yakın kesme noktasını döndür
-    return indexes.reduce((curr, next) => curr < next ? curr : next);
-  }
-
   String _getGtinFromRaw(String raw) {
-    String foundGtin = raw; // Bulamazsa ham hali kalsın
-    processSegment(raw, (gtin, sn, lot, date) {
-      if (gtin != null) {
-        foundGtin = gtin;
-      }
-    });
-    return foundGtin;
+    return Gs1Parser.parse(raw).gtin ?? raw;
   }
 
   void _appendToHistory(List<QrLookupResultWithCount> entries) {

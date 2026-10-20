@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mobile_scanner/mobile_scanner.dart'; 
 import 'qr_scan_view_model.dart';
 import 'qr_type_stats_page.dart'; 
+import '../../core/gs1/gs1_parser.dart';
 import '../../core/models/qr_lookup_result.dart';
 import 'package:flutter/services.dart';
 import '../../core/subscription/subscription_page.dart';
@@ -455,13 +456,11 @@ class _QrScanViewState extends State<_QrScanView> {
                             final String? rawValue = capture.barcodes.first.rawValue;
                             if (rawValue != null) {
                               hasScannedIts = true;
-                              String? gtin, sn, lot; DateTime? skt;
-                              _vm.processSegment(rawValue, (g, s, l, d) {
-                                if (g != null) gtin = g;
-                                if (s != null) sn = s;
-                                if (l != null) lot = l;
-                                if (d != null) skt = d;
-                              });
+                              final parsed = Gs1Parser.parse(rawValue);
+                              final gtin = parsed.gtin;
+                              final sn = parsed.serialNo;
+                              final lot = parsed.batchNo;
+                              final skt = parsed.expiryDate;
                               final String? ucKodu = await _vm.checkDrugStatusWithIts(
                                 context: context,
                                 gtin: gtin ?? "",

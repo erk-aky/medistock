@@ -23,6 +23,8 @@ qr_batch_scanner/macos/Flutter/ephemeral/
 # --- .NET (QrBackend) ---
 QrBackend/bin/
 QrBackend/obj/
+QrBackend.Tests/bin/
+QrBackend.Tests/obj/
 QrBackend/appsettings.json
 QrBackend/appsettings.Development.json
 QrBackend/output_result.jpg

@@ -99,9 +99,9 @@ namespace QrBackend.Controllers
         {
             var result = await _authService.UpdateUserProfile(request);
             if (!result.Success)
-                return BadRequest(new { message = result.Message });
+                return BadRequest(new { success = false, message = result.Message });
 
-            return Ok(new { message = result.Message });
+            return Ok(new { success = true, message = result.Message });
         }
 
         [HttpPost("register")]

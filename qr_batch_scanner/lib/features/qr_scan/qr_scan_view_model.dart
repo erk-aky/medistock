@@ -1366,7 +1366,7 @@ class QrScanViewModel extends ChangeNotifier {
           qrData?.productName ?? "-",
           formattedDate,
           qrData?.batchNo ?? "-",
-          item.qr.value, 
+          item.qr.value.replaceAll('\x1D', ' '),
         ];
 
         for (int j = 0; j < rowData.length; j++) {

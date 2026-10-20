@@ -62,16 +62,22 @@ class LocalDbService {
       
       // NOT: 'drugs' tablo adın, 'BARKOD' ise sütun adın.
       // DB Browser'da farklı yaptıysan burayı ona göre güncellemelisin.
-      List<Map<String, dynamic>> results = await db.query(
-        'filtreli_veriler', 
-        where: 'BARKOD = ?', 
-        whereArgs: [barcode],
-        limit: 1,
-      );
+      final candidates = [barcode];
+      if (barcode.length == 13) candidates.add('0$barcode');
+      if (barcode.length == 14 && barcode.startsWith('0')) candidates.add(barcode.substring(1));
 
-      if (results.isNotEmpty) {
-        print("✅ İlaç bulundu: ${results.first}");
-        return results.first;
+      for (final candidate in candidates) {
+        List<Map<String, dynamic>> results = await db.query(
+          'filtreli_veriler',
+          where: 'BARKOD = ?',
+          whereArgs: [candidate],
+          limit: 1,
+        );
+
+        if (results.isNotEmpty) {
+          print("✅ İlaç bulundu: ${results.first}");
+          return results.first;
+        }
       }
     } catch (e) {
       print("❌ LocalDbService Sorgu Hatası: $e");

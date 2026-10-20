@@ -781,27 +781,6 @@ class QrScanViewModel extends ChangeNotifier {
     }
   }
 
-  // Okunan barkodun Excel listesindeki durumunu kontrol eder
-  String checkBarcodeStatus(String rawBarcode) {
-    // Senin algoritmanla GTIN'i ayıkla
-    String pureBarcode = _getGtinFromRaw(rawBarcode);
-
-    print("🎯 AYIKLANAN BARKOD: $pureBarcode");
-
-    if (_targetInventory.isEmpty) return "no_list";
-    
-    if (!_targetInventory.containsKey(pureBarcode)) {
-      print("❌ LİSTEDE YOK: $pureBarcode");
-      return "not_in_list";
-    }
-
-    int target = _targetInventory[pureBarcode]!;
-    int current = _currentScanSession[pureBarcode] ?? 0;
-
-    if (current < target) return "correct";
-    return "excess";
-  }
-
   // Sayım miktarını 1 artıran fonksiyon
   void incrementScannedProduct(String barcode) {
     _currentScanSession[barcode] = (_currentScanSession[barcode] ?? 0) + 1;

@@ -33,7 +33,14 @@ builder.Services.AddExceptionHandler<ApiExceptionHandler>();
 builder.Services.AddProblemDetails();
 builder.Services.AddScoped<EmailService>();
 // YENİ: ItsService Kaydı eklendi
-builder.Services.AddScoped<IItsService, ItsService>(); 
+builder.Services.AddSingleton<IItsService>(provider =>
+{
+    var configuredPath = builder.Configuration["Its:CodesFilePath"];
+    var filePath = string.IsNullOrWhiteSpace(configuredPath)
+        ? Path.Combine(AppContext.BaseDirectory, "Data", "its_codes.json")
+        : configuredPath;
+    return new ItsService(filePath, provider.GetRequiredService<ILogger<ItsService>>());
+});
 
 builder.Services.AddDataProtection().SetApplicationName("QrBackend");
 builder.Services.AddSingleton<RegistrationTicketService>();

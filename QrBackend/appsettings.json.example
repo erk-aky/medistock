@@ -14,6 +14,9 @@
     "NotifyEmail": "you@example.com",
     "HttpTimeoutSeconds": 120
   },
+  "Its": {
+    "CodesFilePath": ""
+  },
   "Smtp": {
     "Host": "smtp.gmail.com",
     "Port": 587,

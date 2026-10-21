@@ -25,7 +25,7 @@ namespace QrBackend.Services
             await conn.OpenAsync();
 
             // SQL Güncellendi: is_email_confirmed eklendi
-            const string sql = "SELECT id, username, password, email, subscription_status, trial_end_date, subscription_end_date, is_email_confirmed FROM app_user WHERE username = @username LIMIT 1;";
+            const string sql = "SELECT id, username, password, email, subscription_status, trial_end_date, subscription_end_date, is_email_confirmed FROM app_user WHERE LOWER(username) = LOWER(@username) LIMIT 1;";
 
             await using var cmd = new NpgsqlCommand(sql, conn);
             cmd.Parameters.AddWithValue("@username", username);
@@ -52,10 +52,10 @@ namespace QrBackend.Services
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync();
 
-            const string sql = "SELECT id, username, password, email, subscription_status, trial_end_date, subscription_end_date, is_email_confirmed FROM app_user WHERE username = @value OR email = @value LIMIT 1;";
+            const string sql = "SELECT id, username, password, email, subscription_status, trial_end_date, subscription_end_date, is_email_confirmed FROM app_user WHERE LOWER(username) = LOWER(@value) OR LOWER(email) = LOWER(@value) LIMIT 1;";
 
             await using var cmd = new NpgsqlCommand(sql, conn);
-            cmd.Parameters.AddWithValue("@value", usernameOrEmail);
+            cmd.Parameters.AddWithValue("@value", InputRules.NormalizeUsername(usernameOrEmail));
 
             await using var reader = await cmd.ExecuteReaderAsync();
 
@@ -86,33 +86,38 @@ namespace QrBackend.Services
         // Kullanıcıyı kaydetmeden onay kodunu mail atar ve onay için gereken bileti döner
         public async Task<(bool Success, string Message, string? Ticket)> RegisterAsync(RegisterRequest request)
         {
-            var passwordError = PasswordRules.Validate(request.Password);
-            if (passwordError != null) return (false, passwordError, null);
+            var username = InputRules.NormalizeUsername(request.Username);
+            var email = InputRules.NormalizeEmail(request.Email);
+
+            var inputError = InputRules.ValidateUsername(username)
+                ?? InputRules.ValidateEmail(email)
+                ?? InputRules.ValidatePassword(request.Password);
+            if (inputError != null) return (false, inputError, null);
 
             await using (var conn = new NpgsqlConnection(_connectionString))
             {
                 await conn.OpenAsync();
-                var takenMessage = await CheckUsernameAndEmailTakenAsync(conn, request.Username, request.Email);
+                var takenMessage = await CheckUsernameAndEmailTakenAsync(conn, username, email);
                 if (takenMessage != null) return (false, takenMessage, null);
             }
 
-            if (!_emailCooldown.TryAcquire(request.Email, DateTimeOffset.UtcNow, out var remaining))
+            if (!_emailCooldown.TryAcquire(email, DateTimeOffset.UtcNow, out var remaining))
                 return (false, $"Yeni kod için lütfen {remaining} saniye bekleyin.", null);
 
             string code = RegistrationTicketService.GenerateCode();
             try
             {
-                await _emailService.SendConfirmationEmailAsync(request.Email, code);
+                await _emailService.SendConfirmationEmailAsync(email, code);
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Onay Maili Hatası: {ex.Message}");
-                _emailCooldown.Release(request.Email);
+                _emailCooldown.Release(email);
                 return (false, "Onay kodu gönderilemedi, lütfen e-posta adresinizi kontrol edip tekrar deneyin.", null);
             }
 
             string passwordHash = BCrypt.Net.BCrypt.HashPassword(request.Password);
-            string ticket = _ticketService.Create(request.Username, request.Email, passwordHash, code, DateTimeOffset.UtcNow);
+            string ticket = _ticketService.Create(username, email, passwordHash, code, DateTimeOffset.UtcNow);
 
             return (true, "Onay kodu e-postanıza gönderildi.", ticket);
         }
@@ -162,8 +167,8 @@ namespace QrBackend.Services
         {
             const string sql = @"
                 SELECT
-                    COUNT(*) FILTER (WHERE username = @username) AS user_exists,
-                    COUNT(*) FILTER (WHERE email = @email) AS email_exists
+                    COUNT(*) FILTER (WHERE LOWER(username) = LOWER(@username)) AS user_exists,
+                    COUNT(*) FILTER (WHERE LOWER(email) = LOWER(@email)) AS email_exists
                 FROM app_user";
 
             await using var cmd = new NpgsqlCommand(sql, conn);
@@ -186,19 +191,25 @@ namespace QrBackend.Services
 
         public async Task<(bool Success, string Message)> UpdateUserProfile(UpdateProfileRequest request)
         {
+            var username = InputRules.NormalizeUsername(request.NewUsername);
+            var email = InputRules.NormalizeEmail(request.NewEmail);
+
+            var inputError = InputRules.ValidateUsername(username) ?? InputRules.ValidateEmail(email);
+            if (inputError != null) return (false, inputError);
+
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync();
 
             const string checkSql = @"
                 SELECT 
-                    COUNT(*) FILTER (WHERE email = @email AND id != @id) as email_exists,
-                    COUNT(*) FILTER (WHERE username = @username AND id != @id) as user_exists
+                    COUNT(*) FILTER (WHERE LOWER(email) = LOWER(@email) AND id != @id) as email_exists,
+                    COUNT(*) FILTER (WHERE LOWER(username) = LOWER(@username) AND id != @id) as user_exists
                 FROM app_user";
 
             await using (var cmd = new NpgsqlCommand(checkSql, conn))
             {
-                cmd.Parameters.AddWithValue("@email", request.NewEmail);
-                cmd.Parameters.AddWithValue("@username", request.NewUsername);
+                cmd.Parameters.AddWithValue("@email", email);
+                cmd.Parameters.AddWithValue("@username", username);
                 cmd.Parameters.AddWithValue("@id", request.UserId);
 
                 await using var reader = await cmd.ExecuteReaderAsync();
@@ -219,8 +230,8 @@ namespace QrBackend.Services
 
             await using (var updateCmd = new NpgsqlCommand(updateSql, conn))
             {
-                updateCmd.Parameters.AddWithValue("@username", request.NewUsername);
-                updateCmd.Parameters.AddWithValue("@email", request.NewEmail);
+                updateCmd.Parameters.AddWithValue("@username", username);
+                updateCmd.Parameters.AddWithValue("@email", email);
                 updateCmd.Parameters.AddWithValue("@id", request.UserId);
 
                 int affectedRows = await updateCmd.ExecuteNonQueryAsync();
@@ -232,12 +243,16 @@ namespace QrBackend.Services
             return (true, "Profil başarıyla güncellendi.");
         }
 
-        public async Task<(bool Success, string Message)> GenerateForgotPasswordCodeAsync(string email)
+        public async Task<(bool Success, string Message)> GenerateForgotPasswordCodeAsync(string rawEmail)
         {
+            var email = InputRules.NormalizeEmail(rawEmail);
+            var emailError = InputRules.ValidateEmail(email);
+            if (emailError != null) return (false, emailError);
+
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync();
 
-            const string userCheck = "SELECT id FROM app_user WHERE email = @email";
+            const string userCheck = "SELECT id FROM app_user WHERE LOWER(email) = LOWER(@email)";
             await using var checkCmd = new NpgsqlCommand(userCheck, conn);
             checkCmd.Parameters.AddWithValue("@email", email);
             var userId = await checkCmd.ExecuteScalarAsync();
@@ -250,11 +265,11 @@ namespace QrBackend.Services
             string resetCode = RegistrationTicketService.GenerateCode();
             DateTime expiry = DateTime.Now.AddMinutes(15); 
 
-            const string updateSql = "UPDATE app_user SET reset_token = @code, token_expiry = @expiry WHERE email = @email";
+            const string updateSql = "UPDATE app_user SET reset_token = @code, token_expiry = @expiry WHERE id = @id";
             await using var updateCmd = new NpgsqlCommand(updateSql, conn);
             updateCmd.Parameters.AddWithValue("@code", resetCode);
             updateCmd.Parameters.AddWithValue("@expiry", expiry);
-            updateCmd.Parameters.AddWithValue("@email", email);
+            updateCmd.Parameters.AddWithValue("@id", userId);
             await updateCmd.ExecuteNonQueryAsync();
 
             try
@@ -270,15 +285,16 @@ namespace QrBackend.Services
             }
         }
 
-        public async Task<(bool Success, string Message)> ResetPasswordWithCodeAsync(string email, string code, string newPassword)
+        public async Task<(bool Success, string Message)> ResetPasswordWithCodeAsync(string rawEmail, string code, string newPassword)
         {
-            var passwordError = PasswordRules.Validate(newPassword);
+            var email = InputRules.NormalizeEmail(rawEmail);
+            var passwordError = InputRules.ValidatePassword(newPassword);
             if (passwordError != null) return (false, passwordError);
 
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync();
 
-            const string verifySql = "SELECT id FROM app_user WHERE email = @email AND reset_token = @code AND token_expiry > @now";
+            const string verifySql = "SELECT id FROM app_user WHERE LOWER(email) = LOWER(@email) AND reset_token = @code AND token_expiry > @now";
             await using var verifyCmd = new NpgsqlCommand(verifySql, conn);
             verifyCmd.Parameters.AddWithValue("@email", email);
             verifyCmd.Parameters.AddWithValue("@code", code);

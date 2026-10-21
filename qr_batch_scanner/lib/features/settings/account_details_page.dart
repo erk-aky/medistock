@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../core/constants/validation_constants.dart';
 import '../qr_scan/qr_scan_view_model.dart';
 import '../auth/auth_view_model.dart';
 
@@ -106,6 +107,14 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
 
   // 🔥 KRİTİK GÜNCELLEME BURADA
   Future<void> _handleUpdate() async {
+    _usernameController.text = _usernameController.text.trim();
+    _emailController.text = _emailController.text.trim();
+    final inputError = validateUsername(_usernameController.text) ?? validateEmail(_emailController.text);
+    if (inputError != null) {
+      _showSnackBar(inputError, Colors.orange);
+      return;
+    }
+
     if (_glnController.text.isNotEmpty && _glnController.text.length != 13) {
       _showSnackBar("GLN numarası tam 13 hane olmalıdır!", Colors.orange);
       return;
@@ -245,6 +254,7 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
                     label: "Kullanıcı Adı",
                     icon: Icons.alternate_email_rounded,
                     hint: "Kullanıcı adınızı seçin",
+                    formatters: [UsernameSpaceFormatter()],
                   ),
                   const SizedBox(height: 20),
                   _buildField(

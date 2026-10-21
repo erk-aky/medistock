@@ -100,7 +100,7 @@ namespace QrBackend.Tests
         [InlineData("123456", true)]
         public void SifreKurali_EnAz6Karakter(string? password, bool valid)
         {
-            Assert.Equal(valid, PasswordRules.Validate(password) == null);
+            Assert.Equal(valid, InputRules.ValidatePassword(password) == null);
         }
     }
 }

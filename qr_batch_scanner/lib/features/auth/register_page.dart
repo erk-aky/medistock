@@ -186,7 +186,7 @@ class _RegisterPageState extends State<RegisterPage> {
           key: _formKey,
           child: Column(
             children: [
-              _customTextField(_usernameController, 'Kullanıcı Adı', Icons.person_outline),
+              _customTextField(_usernameController, 'Kullanıcı Adı', Icons.person_outline, isUsername: true),
               const SizedBox(height: 16),
               _customTextField(_emailController, 'E-posta Adresi', Icons.email_outlined, isEmail: true),
               const SizedBox(height: 16),
@@ -315,11 +315,12 @@ class _RegisterPageState extends State<RegisterPage> {
     );
   }
 
-  Widget _customTextField(TextEditingController controller, String label, IconData icon, {bool isEmail = false, bool isPassword = false}) {
+  Widget _customTextField(TextEditingController controller, String label, IconData icon, {bool isEmail = false, bool isPassword = false, bool isUsername = false}) {
     return TextFormField(
       controller: controller,
       obscureText: isPassword,
       keyboardType: isEmail ? TextInputType.emailAddress : TextInputType.text,
+      inputFormatters: isUsername ? [UsernameSpaceFormatter()] : null,
       decoration: InputDecoration(
         labelText: label,
         prefixIcon: Icon(icon),
@@ -333,7 +334,8 @@ class _RegisterPageState extends State<RegisterPage> {
       ),
       validator: (v) {
         if (v!.isEmpty) return '$label gerekli';
-        if (isEmail && !v.contains('@')) return 'Geçerli bir e-posta girin';
+        if (isUsername) return validateUsername(v);
+        if (isEmail) return validateEmail(v);
         if (isPassword && v.length < minPasswordLength) return 'Şifre en az $minPasswordLength karakter olmalıdır';
         return null;
       },

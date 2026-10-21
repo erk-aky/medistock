@@ -1,14 +1,6 @@
+using Asp.Versioning;
 using Microsoft.AspNetCore.DataProtection;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Npgsql;
-using System.Diagnostics;
-using System.Text;
-using System.Text.Json;
-using System.IO;
-using System.Linq;
-using System.Collections.Generic;
-using System.Net.Sockets;
 using QrBackend.Middleware;
 using QrBackend.Services; // Senin orijinal namespace'in
 using QrBackend.Models;   // Senin orijinal namespace'in
@@ -18,6 +10,7 @@ var builder = WebApplication.CreateBuilder(args);
 // --- SERVİS KAYITLARI ---
 builder.Services.AddControllers().ConfigureApiBehaviorOptions(options =>
 {
+    options.SuppressMapClientErrors = true;
     options.InvalidModelStateResponseFactory = context =>
     {
         var detail = string.Join(" | ", context.ModelState
@@ -27,7 +20,12 @@ builder.Services.AddControllers().ConfigureApiBehaviorOptions(options =>
         return new BadRequestObjectResult(ApiResponses.Error(ApiResponses.InvalidRequestMessage, detail, isDevelopment));
     };
 });
-builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
+builder.Services.AddApiVersioning(options =>
+{
+    options.DefaultApiVersion = new ApiVersion(1, 0);
+    options.ReportApiVersions = true;
+    options.ApiVersionReader = new UrlSegmentApiVersionReader();
+}).AddMvc();
 builder.Logging.AddFilter("Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware", LogLevel.None);
 builder.Services.AddExceptionHandler<ApiExceptionHandler>();
 builder.Services.AddProblemDetails();
@@ -56,6 +54,13 @@ builder.Services.AddScoped<AuthService>(provider =>
     return new AuthService(connString, emailService, ticketService, emailCooldown);
 });
 
+builder.Services.AddScoped<DrugRepository>(provider =>
+{
+    var config = provider.GetRequiredService<IConfiguration>();
+    return new DrugRepository(config.GetConnectionString("Default") ?? "");
+});
+builder.Services.AddScoped<QrLookupService>();
+
 // --- TİTCK HAFTALIK SENKRON ---
 builder.Services.Configure<TitckSyncOptions>(builder.Configuration.GetSection("TitckSync"));
 builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection("Smtp"));
@@ -78,195 +83,13 @@ builder.Services.AddHostedService(provider => provider.GetRequiredService<TitckS
 var app = builder.Build();
 
 app.UseExceptionHandler();
-app.UseStatusCodePages(async statusContext =>
-{
-    var response = statusContext.HttpContext.Response;
-    await response.WriteAsJsonAsync(ApiResponses.Error(ApiResponses.MessageForStatus(response.StatusCode)));
-});
+app.UseStatusCodePages(StatusCodeResponseWriter.WriteAsync);
 
 // --- ENDPOINTLER ---
 app.MapGet("/", () => Results.Ok(new { success = true, message = "Backend JSON Modunda Calisiyor" }));
-
-// YENİ: İTS Hata Kodu Çözümleme Endpoint'i
-app.MapPost("/api/its/resolve-code", async (ItsCodeRequest request, IItsService itsService) =>
-{
-    if (string.IsNullOrEmpty(request.Code))
-        return Results.BadRequest(ApiResponses.Error("Kod boş olamaz."));
-
-    var result = await itsService.ResolveItsCodeAsync(request.Code);
-    return Results.Ok(result);
-});
-
-app.MapPost("/api/qr/lookup", async (HttpRequest request, IConfiguration config) =>
-{
-    var totalSw = Stopwatch.StartNew();
-    var stepSw = Stopwatch.StartNew();
-    
-    Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] >>> [1] İSTEK ALINDI");
-
-    if (!request.HasFormContentType) return Results.BadRequest(ApiResponses.Error("Fotoğraf form verisi olarak gönderilmelidir."));
-
-    var form = await request.ReadFormAsync();
-    var file = form.Files["image"];
-    if (file == null || file.Length == 0) return Results.BadRequest(ApiResponses.Error("Fotoğraf bulunamadı."));
-
-    // 1. Veri Okuma
-    using var msInput = new MemoryStream();
-    await file.CopyToAsync(msInput);
-    byte[] imageBytes = msInput.ToArray();
-    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [2] RAM'E ALMA: {stepSw.ElapsedMilliseconds}ms");
-    stepSw.Restart();
-
-    // 2. C++ Servis İletişimi
-    string cPlusPlusOutput = "";
-    try 
-    {
-        using var client = new TcpClient("127.0.0.1", 8888);
-        using var stream = client.GetStream();
-
-        byte[] sizeHeader = BitConverter.GetBytes(imageBytes.Length);
-        await stream.WriteAsync(sizeHeader, 0, sizeHeader.Length);
-        await stream.WriteAsync(imageBytes, 0, imageBytes.Length);
-        await stream.FlushAsync();
-        
-        byte[] buffer = new byte[65536]; 
-        int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
-        cPlusPlusOutput = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-        Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [3] C++ CEVAP ALINDI: {stepSw.ElapsedMilliseconds}ms");
-        stepSw.Restart();
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"[HATA] C++ Servis: {ex.Message}");
-        return Results.Json(ApiResponses.Error("Karekod okuma servisi şu an çalışmıyor, lütfen daha sonra tekrar deneyin."), statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
-
-    // 3. Ayrıştırma ve DB Sorgusu
-    var detections = new List<QrDetection>();
-    var rawLines = cPlusPlusOutput.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-    foreach (var line in rawLines.Where(l => l.StartsWith("QR_DATA")))
-    {
-        try {
-            var parts = line.Split('|');
-            var val = parts[0].Split(':')[1].Trim();
-            var coords = parts[1].Split(':')[1].Trim().Split(',').Select(int.Parse).ToArray();
-            detections.Add(new QrDetection { Value = val, X = coords[0], Y = coords[1], W = coords[2], H = coords[3] });
-        } catch { }
-    }
-
-    var finalResults = new List<object>();
-    if (detections.Any())
-    {
-        var connStr = config.GetConnectionString("Default");
-
-        foreach (var det in detections)
-        {
-            var parsed = Gs1Parser.Parse(det.Value);
-            var gtin = parsed.Gtin;
-
-            // --- YENİ DB SORGUSU (Sadece GTIN ile) ---
-            string? productName = null;
-            bool foundInDb = false;
-
-            if (!string.IsNullOrEmpty(gtin))
-            {
-                try {
-                    await using var conn = new NpgsqlConnection(connStr);
-                    await conn.OpenAsync();
-                    // Yeni tablo: 'barkod' kolonunda ara, 'urun_adi' çek
-                    string query = "SELECT urun_adi FROM qrcodes WHERE barkod = @gtin LIMIT 1";
-                    await using var cmd = new NpgsqlCommand(query, conn);
-                    cmd.Parameters.AddWithValue("gtin", gtin);
-
-                    var result = await cmd.ExecuteScalarAsync();
-                    if (result != null)
-                    {
-                        productName = result.ToString();
-                        foundInDb = true;
-                    }
-                } catch (Exception ex) { Console.WriteLine($"[DB HATA]: {ex.Message}"); }
-            }
-
-            finalResults.Add(new {
-                value = det.Value,
-                found = foundInDb,
-                data = new {
-                    gtin = gtin,
-                    serialNo = parsed.SerialNo,
-                    batchNo = parsed.BatchNo,
-                    expiryDate = parsed.ExpiryDate?.ToString("yyyy-MM-dd"),
-                    productName = productName
-                },
-                x = det.X, y = det.Y, w = det.W, h = det.H 
-            });
-        }
-        Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [4] DB KONTROL BİTTİ: {stepSw.ElapsedMilliseconds}ms");
-    }
-
-    totalSw.Stop();
-    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [5] TOPLAM SÜRE: {totalSw.ElapsedMilliseconds}ms\n---------------------------------");
-
-    return Results.Ok(new { success = true, results = finalResults });
-});
-
-// Mobil uygulamanın offline SQLite'ının güncel olup olmadığını kontrol etmesi için.
-app.MapGet("/api/qr/db-version", async (IConfiguration config) =>
-{
-    var connStr = config.GetConnectionString("Default");
-    await using var conn = new NpgsqlConnection(connStr);
-    await conn.OpenAsync();
-
-    const string query = "SELECT id, started_at FROM sync_log WHERE status = 'success' ORDER BY started_at DESC LIMIT 1;";
-    await using var cmd = new NpgsqlCommand(query, conn);
-    await using var reader = await cmd.ExecuteReaderAsync();
-
-    if (!await reader.ReadAsync())
-        return Results.Ok(new { success = true, version = 0, updatedAt = (DateTimeOffset?)null });
-
-    return Results.Ok(new { success = true, version = reader.GetInt64(0), updatedAt = reader.GetFieldValue<DateTimeOffset>(1) });
-});
-
-// Mobil uygulamanın offline SQLite'ını yeniden doldurmak için tüm ilaç listesini döner.
-app.MapGet("/api/qr/db-export", async (IConfiguration config) =>
-{
-    var connStr = config.GetConnectionString("Default");
-    await using var conn = new NpgsqlConnection(connStr);
-    await conn.OpenAsync();
-
-    const string query = "SELECT barkod, urun_adi FROM qrcodes ORDER BY barkod;";
-    await using var cmd = new NpgsqlCommand(query, conn);
-    await using var reader = await cmd.ExecuteReaderAsync();
-
-    var rows = new List<object>();
-    while (await reader.ReadAsync())
-    {
-        rows.Add(new { barkod = reader.GetString(0), urunAdi = reader.IsDBNull(1) ? "" : reader.GetString(1) });
-    }
-
-    return Results.Ok(new { success = true, items = rows });
-});
-
-if (app.Environment.IsDevelopment())
-{
-    // Dev-only: haftalık TİTCK senkronunu bir hafta beklemeden manuel tetiklemek için
-    app.MapPost("/api/admin/titck-sync/run", async (TitckSyncService syncService) =>
-    {
-        var result = await syncService.RunOnceAsync(CancellationToken.None);
-        return Results.Ok(result);
-    });
-}
 
 app.MapControllers();
 app.Urls.Add("http://0.0.0.0:5289");
 app.Run();
 
-public class QrDetection {
-    public string Value { get; set; } = "";
-    public int X { get; set; } public int Y { get; set; }
-    public int W { get; set; } public int H { get; set; }
-}
-public class LoginRequest {
-    public string UsernameOrEmail { get; set; } = string.Empty;
-    public string Password { get; set; } = string.Empty;
-}
 public partial class Program { }

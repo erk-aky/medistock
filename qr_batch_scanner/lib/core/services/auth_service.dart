@@ -9,7 +9,7 @@ class AuthService {
   AuthService({ApiClient? apiClient}) : _api = apiClient ?? ApiClient();
 
   /// ✅ YENİ: E-posta Doğrulama Kodunu Backend'e Gönderir
-  /// POST /api/auth/verify-email
+  /// POST /api/v1/auth/verify-email
   Future<Map<String, dynamic>> verifyEmail(String ticket, String code) async {
     return _api.post(
       ApiConstants.verifyEmail,
@@ -51,7 +51,7 @@ class AuthService {
     return decoded;
   }
 
-  /// POST /api/auth/login
+  /// POST /api/v1/auth/login
   Future<Map<String, dynamic>> login(String username, String password) async {
     final decoded = await _api.post(ApiConstants.login, {'usernameOrEmail': username, 'password': password});
 
@@ -75,7 +75,7 @@ class AuthService {
     return decoded;
   }
 
-  /// POST /api/auth/register
+  /// POST /api/v1/auth/register
   Future<Map<String, dynamic>> register(String username, String email, String password) async {
     return _api.post(ApiConstants.register, {
       'username': username,

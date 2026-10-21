@@ -4,9 +4,7 @@ using QrBackend.Services;
 
 namespace QrBackend.Controllers
 {
-    [ApiController]
-    [Route("api/auth")]
-    public class AuthController : ControllerBase
+    public class AuthController : ApiControllerBase
     {
         private readonly AuthService _authService;
 

@@ -3,7 +3,7 @@ class ApiConstants {
     'API_BASE_URL',
     defaultValue: 'https://asphaltic-manda-unquarrelling.ngrok-free.dev',
   );
-  static const String apiPrefix = '/api';
+  static const String apiPrefix = '/api/v1';
 
   static const String login = '$apiPrefix/auth/login';
   static const String register = '$apiPrefix/auth/register';

@@ -41,7 +41,7 @@ namespace QrBackend.Tests
         [InlineData("Production")]
         public async Task OlmayanAdres_404VeOrtakBicim(string environment)
         {
-            var response = await CreateClient(environment).GetAsync("/api/v9/olmayan");
+            var response = await CreateClient(environment).GetAsync("/olmayan-adres");
             var json = await ReadJsonAsync(response);
             Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
             Assert.False(json.GetProperty("success").GetBoolean());
@@ -51,7 +51,7 @@ namespace QrBackend.Tests
         [Fact]
         public async Task YanlisIstekTuru_405VeOrtakBicim()
         {
-            var response = await CreateClient("Production").GetAsync("/api/auth/login");
+            var response = await CreateClient("Production").GetAsync("/api/v1/auth/login");
             var json = await ReadJsonAsync(response);
             Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
             Assert.False(json.GetProperty("success").GetBoolean());
@@ -60,7 +60,7 @@ namespace QrBackend.Tests
         [Fact]
         public async Task ControllerBozukJson_GelistirmedeDetayliDoner()
         {
-            var response = await CreateClient("Development").PostAsync("/api/auth/login", Json("{\"usernameOrEmail\": 5"));
+            var response = await CreateClient("Development").PostAsync("/api/v1/auth/login", Json("{\"usernameOrEmail\": 5"));
             var json = await ReadJsonAsync(response);
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             Assert.Equal("Geçersiz istek biçimi.", json.GetProperty("message").GetString());
@@ -70,7 +70,7 @@ namespace QrBackend.Tests
         [Fact]
         public async Task ControllerBozukJson_CanlidaDetaysizDoner()
         {
-            var response = await CreateClient("Production").PostAsync("/api/auth/login", Json("{\"usernameOrEmail\": 5"));
+            var response = await CreateClient("Production").PostAsync("/api/v1/auth/login", Json("{\"usernameOrEmail\": 5"));
             var json = await ReadJsonAsync(response);
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             Assert.Equal("Geçersiz istek biçimi.", json.GetProperty("message").GetString());
@@ -82,7 +82,7 @@ namespace QrBackend.Tests
         [InlineData("Production", false)]
         public async Task QrEndpointBozukJson_400VeOrtakBicim(string environment, bool hasDetail)
         {
-            var response = await CreateClient(environment).PostAsync("/api/its/resolve-code", Json("{bozuk"));
+            var response = await CreateClient(environment).PostAsync("/api/v1/its/resolve-code", Json("{bozuk"));
             var json = await ReadJsonAsync(response);
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             Assert.False(json.GetProperty("success").GetBoolean());
@@ -93,7 +93,7 @@ namespace QrBackend.Tests
         [Fact]
         public async Task ItsBosKod_400VeOrtakBicim()
         {
-            var response = await CreateClient("Production").PostAsJsonAsync("/api/its/resolve-code", new { code = "" });
+            var response = await CreateClient("Production").PostAsJsonAsync("/api/v1/its/resolve-code", new { code = "" });
             var json = await ReadJsonAsync(response);
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             Assert.False(json.GetProperty("success").GetBoolean());
@@ -103,7 +103,7 @@ namespace QrBackend.Tests
         [Fact]
         public async Task QrLookupFormsuzIstek_400VeOrtakBicim()
         {
-            var response = await CreateClient("Production").PostAsync("/api/qr/lookup", Json("{}"));
+            var response = await CreateClient("Production").PostAsync("/api/v1/qr/lookup", Json("{}"));
             var json = await ReadJsonAsync(response);
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             Assert.False(json.GetProperty("success").GetBoolean());
@@ -114,7 +114,7 @@ namespace QrBackend.Tests
         public async Task QrLookupFotografsizForm_400VeOrtakBicim()
         {
             var form = new MultipartFormDataContent { { new StringContent("x"), "baska" } };
-            var response = await CreateClient("Production").PostAsync("/api/qr/lookup", form);
+            var response = await CreateClient("Production").PostAsync("/api/v1/qr/lookup", form);
             var json = await ReadJsonAsync(response);
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             Assert.Equal("Fotoğraf bulunamadı.", json.GetProperty("message").GetString());
@@ -124,7 +124,7 @@ namespace QrBackend.Tests
         public async Task QrLookupCppKapali_503VeOrtakBicim()
         {
             var form = new MultipartFormDataContent { { new ByteArrayContent(new byte[] { 1, 2, 3 }), "image", "foto.jpg" } };
-            var response = await CreateClient("Production").PostAsync("/api/qr/lookup", form);
+            var response = await CreateClient("Production").PostAsync("/api/v1/qr/lookup", form);
             var json = await ReadJsonAsync(response);
             Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
             Assert.False(json.GetProperty("success").GetBoolean());
@@ -134,7 +134,7 @@ namespace QrBackend.Tests
         [Fact]
         public async Task OnayHataliBilet_400VeOrtakBicim()
         {
-            var response = await CreateClient("Production").PostAsJsonAsync("/api/auth/verify-email", new { ticket = "uydurma", code = "123456" });
+            var response = await CreateClient("Production").PostAsJsonAsync("/api/v1/auth/verify-email", new { ticket = "uydurma", code = "123456" });
             var json = await ReadJsonAsync(response);
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
             Assert.False(json.GetProperty("success").GetBoolean());

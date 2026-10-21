@@ -26,7 +26,7 @@ void main() {
 
     await api.post(ApiConstants.login, {'usernameOrEmail': 'ali'});
 
-    expect(sent.url.toString(), 'https://test.local/api/auth/login');
+    expect(sent.url.toString(), 'https://test.local/api/v1/auth/login');
     expect(sent.method, 'POST');
     expect(sent.headers['ngrok-skip-browser-warning'], 'true');
     expect(sent.headers['Content-Type'], startsWith('application/json'));
@@ -76,7 +76,7 @@ void main() {
   });
 
   test('profil adresinde kullanıcı adı güvenli şekilde kodlanır', () {
-    expect(ApiConstants.profile('Ayşe Nur'), '/api/auth/profile/Ay%C5%9Fe%20Nur');
+    expect(ApiConstants.profile('Ayşe Nur'), '/api/v1/auth/profile/Ay%C5%9Fe%20Nur');
   });
 
   test('geliştirme modunda teknik detay mesajın altına eklenir', () {

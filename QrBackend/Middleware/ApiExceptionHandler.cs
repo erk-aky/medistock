@@ -17,21 +17,31 @@ namespace QrBackend.Middleware
         // Yakalanmayan hatayı loga yazar, kullanıcıya anlaşılır mesaj döner, geliştirmede teknik detayı da ekliyor
         public async ValueTask<bool> TryHandleAsync(HttpContext context, Exception exception, CancellationToken cancellationToken)
         {
-            _logger.LogError(exception, "İşlenmeyen hata: {Method} {Path}", context.Request.Method, context.Request.Path);
+            int statusCode;
+            string message;
 
-            var isDatabaseUnreachable = exception is NpgsqlException && exception is not PostgresException;
-            context.Response.StatusCode = isDatabaseUnreachable
-                ? StatusCodes.Status503ServiceUnavailable
-                : StatusCodes.Status500InternalServerError;
+            if (exception is BadHttpRequestException badRequest)
+            {
+                _logger.LogWarning(exception, "Hatalı istek: {Method} {Path}", context.Request.Method, context.Request.Path);
+                statusCode = badRequest.StatusCode;
+                message = ApiResponses.MessageForStatus(statusCode);
+            }
+            else
+            {
+                _logger.LogError(exception, "İşlenmeyen hata: {Method} {Path}", context.Request.Method, context.Request.Path);
 
-            var message = isDatabaseUnreachable
-                ? "Sunucu şu an veritabanına ulaşamıyor, lütfen daha sonra tekrar deneyin."
-                : "Beklenmeyen bir hata oluştu.";
+                var isDatabaseUnreachable = exception is NpgsqlException && exception is not PostgresException;
+                statusCode = isDatabaseUnreachable
+                    ? StatusCodes.Status503ServiceUnavailable
+                    : StatusCodes.Status500InternalServerError;
 
-            object body = _environment.IsDevelopment()
-                ? new { success = false, message, detail = DescribeException(exception) }
-                : new { success = false, message };
+                message = isDatabaseUnreachable
+                    ? "Sunucu şu an veritabanına ulaşamıyor, lütfen daha sonra tekrar deneyin."
+                    : "Beklenmeyen bir hata oluştu.";
+            }
 
+            context.Response.StatusCode = statusCode;
+            var body = ApiResponses.Error(message, DescribeException(exception), _environment.IsDevelopment());
             await context.Response.WriteAsJsonAsync(body, cancellationToken);
             return true;
         }

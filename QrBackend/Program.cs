@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Npgsql;
 using System.Diagnostics;
 using System.Text;
@@ -15,7 +16,19 @@ using QrBackend.Models;   // Senin orijinal namespace'in
 var builder = WebApplication.CreateBuilder(args);
 
 // --- SERVİS KAYITLARI ---
-builder.Services.AddControllers();
+builder.Services.AddControllers().ConfigureApiBehaviorOptions(options =>
+{
+    options.InvalidModelStateResponseFactory = context =>
+    {
+        var detail = string.Join(" | ", context.ModelState
+            .Where(e => e.Value?.Errors.Count > 0)
+            .SelectMany(e => e.Value!.Errors.Select(err => $"{e.Key}: {err.ErrorMessage}")));
+        var isDevelopment = context.HttpContext.RequestServices.GetRequiredService<IHostEnvironment>().IsDevelopment();
+        return new BadRequestObjectResult(ApiResponses.Error(ApiResponses.InvalidRequestMessage, detail, isDevelopment));
+    };
+});
+builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware", LogLevel.None);
 builder.Services.AddExceptionHandler<ApiExceptionHandler>();
 builder.Services.AddProblemDetails();
 builder.Services.AddScoped<EmailService>();
@@ -58,15 +71,20 @@ builder.Services.AddHostedService(provider => provider.GetRequiredService<TitckS
 var app = builder.Build();
 
 app.UseExceptionHandler();
+app.UseStatusCodePages(async statusContext =>
+{
+    var response = statusContext.HttpContext.Response;
+    await response.WriteAsJsonAsync(ApiResponses.Error(ApiResponses.MessageForStatus(response.StatusCode)));
+});
 
 // --- ENDPOINTLER ---
-app.MapGet("/", () => "Backend JSON Modunda Calisiyor");
+app.MapGet("/", () => Results.Ok(new { success = true, message = "Backend JSON Modunda Calisiyor" }));
 
 // YENİ: İTS Hata Kodu Çözümleme Endpoint'i
 app.MapPost("/api/its/resolve-code", async (ItsCodeRequest request, IItsService itsService) =>
 {
-    if (string.IsNullOrEmpty(request.Code)) 
-        return Results.BadRequest(new { message = "Kod boş olamaz" });
+    if (string.IsNullOrEmpty(request.Code))
+        return Results.BadRequest(ApiResponses.Error("Kod boş olamaz."));
 
     var result = await itsService.ResolveItsCodeAsync(request.Code);
     return Results.Ok(result);
@@ -79,11 +97,11 @@ app.MapPost("/api/qr/lookup", async (HttpRequest request, IConfiguration config)
     
     Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] >>> [1] İSTEK ALINDI");
 
-    if (!request.HasFormContentType) return Results.BadRequest("Form-data bekleniyor");
+    if (!request.HasFormContentType) return Results.BadRequest(ApiResponses.Error("Fotoğraf form verisi olarak gönderilmelidir."));
 
     var form = await request.ReadFormAsync();
     var file = form.Files["image"];
-    if (file == null || file.Length == 0) return Results.BadRequest("Image bulunamadi");
+    if (file == null || file.Length == 0) return Results.BadRequest(ApiResponses.Error("Fotoğraf bulunamadı."));
 
     // 1. Veri Okuma
     using var msInput = new MemoryStream();
@@ -113,7 +131,7 @@ app.MapPost("/api/qr/lookup", async (HttpRequest request, IConfiguration config)
     catch (Exception ex)
     {
         Console.WriteLine($"[HATA] C++ Servis: {ex.Message}");
-        return Results.Problem("C++ QR Servisi yanıt vermiyor!");
+        return Results.Json(ApiResponses.Error("Karekod okuma servisi şu an çalışmıyor, lütfen daha sonra tekrar deneyin."), statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
     // 3. Ayrıştırma ve DB Sorgusu
@@ -181,7 +199,7 @@ app.MapPost("/api/qr/lookup", async (HttpRequest request, IConfiguration config)
     totalSw.Stop();
     Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [5] TOPLAM SÜRE: {totalSw.ElapsedMilliseconds}ms\n---------------------------------");
 
-    return Results.Ok(new { results = finalResults });
+    return Results.Ok(new { success = true, results = finalResults });
 });
 
 // Mobil uygulamanın offline SQLite'ının güncel olup olmadığını kontrol etmesi için.
@@ -196,9 +214,9 @@ app.MapGet("/api/qr/db-version", async (IConfiguration config) =>
     await using var reader = await cmd.ExecuteReaderAsync();
 
     if (!await reader.ReadAsync())
-        return Results.Ok(new { version = 0, updatedAt = (DateTimeOffset?)null });
+        return Results.Ok(new { success = true, version = 0, updatedAt = (DateTimeOffset?)null });
 
-    return Results.Ok(new { version = reader.GetInt64(0), updatedAt = reader.GetFieldValue<DateTimeOffset>(1) });
+    return Results.Ok(new { success = true, version = reader.GetInt64(0), updatedAt = reader.GetFieldValue<DateTimeOffset>(1) });
 });
 
 // Mobil uygulamanın offline SQLite'ını yeniden doldurmak için tüm ilaç listesini döner.
@@ -218,7 +236,7 @@ app.MapGet("/api/qr/db-export", async (IConfiguration config) =>
         rows.Add(new { barkod = reader.GetString(0), urunAdi = reader.IsDBNull(1) ? "" : reader.GetString(1) });
     }
 
-    return Results.Ok(rows);
+    return Results.Ok(new { success = true, items = rows });
 });
 
 if (app.Environment.IsDevelopment())
@@ -244,3 +262,4 @@ public class LoginRequest {
     public string UsernameOrEmail { get; set; } = string.Empty;
     public string Password { get; set; } = string.Empty;
 }
+public partial class Program { }

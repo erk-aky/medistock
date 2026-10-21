@@ -67,8 +67,9 @@ class DbSyncService {
       throw Exception('İlaç listesi indirilemedi (${resp.statusCode})');
     }
 
-    final List<dynamic> decoded = jsonDecode(resp.body);
-    return decoded.map((item) {
+    final decoded = jsonDecode(resp.body) as Map<String, dynamic>;
+    final List<dynamic> items = decoded['items'] as List<dynamic>? ?? [];
+    return items.map((item) {
       final map = item as Map<String, dynamic>;
       return <String, dynamic>{
         'BARKOD': map['barkod'],

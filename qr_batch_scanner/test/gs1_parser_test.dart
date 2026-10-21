@@ -65,6 +65,24 @@ void main() {
     expect(r.expiryDate, DateTime(2026, 3, 31));
   });
 
+  test('gerçek GS siz ilaç karekodları doğru ayrılır', () {
+    final cases = {
+      '010869968009034421I01001000766908617290831102502730009': ['I010010007669086', DateTime(2029, 8, 31)],
+      '010869968009034421I01001000766876517290831102502730009': ['I010010007668765', DateTime(2029, 8, 31)],
+      '010869968009034421I01001000766909417290831102502730009': ['I010010007669094', DateTime(2029, 8, 31)],
+      '010869968009034421I01001000766909017290831102502730009': ['I010010007669090', DateTime(2029, 8, 31)],
+      '010869968009034421I01001000766876917290831102502730009': ['I010010007668769', DateTime(2029, 8, 31)],
+      '010869968009034421I01001000766343417260531102502730009': ['I010010007663434', DateTime(2026, 5, 31)],
+    };
+    cases.forEach((raw, expected) {
+      final r = Gs1Parser.parse(raw);
+      expect(r.gtin, '8699680090344');
+      expect(r.serialNo, expected[0]);
+      expect(r.expiryDate, expected[1]);
+      expect(r.batchNo, '2502730009');
+    });
+  });
+
   test('boş veya anlamsız metinde hata vermez', () {
     for (final raw in ['', '   ', 'merhaba', '01123', '17', gs]) {
       final r = Gs1Parser.parse(raw);

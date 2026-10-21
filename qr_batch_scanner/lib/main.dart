@@ -10,7 +10,6 @@ import 'features/qr_scan/qr_scan_view_model.dart';
 import 'features/auth/auth_view_model.dart';
 import 'core/services/auth_service.dart';
 import 'core/services/db_sync_service.dart';
-import 'core/local/db_helper.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -23,9 +22,6 @@ void main() async {
     DeviceOrientation.landscapeRight,
     DeviceOrientation.portraitDown,
   ]);
-
-  // 🔹 OFFLINE SQLITE INIT
-  await DBHelper.init();
 
   runApp(
     MultiProvider(

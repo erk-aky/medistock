@@ -18,7 +18,6 @@ import '../../core/gs1/gs1_parser.dart';
 import '../../core/models/qr_lookup_result.dart';
 import '../../core/services/qr_service.dart';
 import '../../core/services/qr_mlkit_service.dart';
-import '../../core/local/db_helper.dart';
 import '../../core/services/local_db_service.dart'; 
 import '../../core/subscription/subscription_page.dart';
 import '../auth/auth_view_model.dart';
@@ -1093,15 +1092,12 @@ class QrScanViewModel extends ChangeNotifier {
       }
     }
 
-    final row = await DBHelper.getByValue(originalV);
-    if (drugName == null && row != null) drugName = "Kayıtlı Test İlacı";
-
     final bool isFound = drugName != null;
     final qrData = QrData(
-      gtin: gtin ?? (row != null ? row['gtin']?.toString() : null),
-      serialNo: serial ?? (row != null ? row['serial_no']?.toString() : null),
-      batchNo: batch ?? (row != null ? row['batch_no']?.toString() : null),
-      expiryDate: expiry ?? (row != null && row['expiry_date'] != null ? DateTime.tryParse(row['expiry_date'].toString()) : null),
+      gtin: gtin,
+      serialNo: serial,
+      batchNo: batch,
+      expiryDate: expiry,
       productName: drugName,
     );
 

@@ -86,6 +86,22 @@ namespace QrBackend.Tests
         }
 
         [Theory]
+        [InlineData("010869968009034421I01001000766908617290831102502730009", "I010010007669086", 2029, 8, 31)]
+        [InlineData("010869968009034421I01001000766876517290831102502730009", "I010010007668765", 2029, 8, 31)]
+        [InlineData("010869968009034421I01001000766909417290831102502730009", "I010010007669094", 2029, 8, 31)]
+        [InlineData("010869968009034421I01001000766909017290831102502730009", "I010010007669090", 2029, 8, 31)]
+        [InlineData("010869968009034421I01001000766876917290831102502730009", "I010010007668769", 2029, 8, 31)]
+        [InlineData("010869968009034421I01001000766343417260531102502730009", "I010010007663434", 2026, 5, 31)]
+        public void GercekGsSizIlacKarekodlari_DogruAyrilir(string raw, string serial, int year, int month, int day)
+        {
+            var r = Gs1Parser.Parse(raw);
+            Assert.Equal("8699680090344", r.Gtin);
+            Assert.Equal(serial, r.SerialNo);
+            Assert.Equal(new DateTime(year, month, day), r.ExpiryDate);
+            Assert.Equal("2502730009", r.BatchNo);
+        }
+
+        [Theory]
         [InlineData("")]
         [InlineData("   ")]
         [InlineData("merhaba")]

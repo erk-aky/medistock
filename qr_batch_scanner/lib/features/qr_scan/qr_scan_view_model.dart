@@ -16,6 +16,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../core/gs1/gs1_parser.dart';
 import '../../core/models/qr_lookup_result.dart';
+import '../../core/network/api_client.dart';
 import '../../core/services/qr_service.dart';
 import '../../core/services/qr_mlkit_service.dart';
 import '../../core/services/local_db_service.dart'; 
@@ -74,6 +75,7 @@ class QrLookupResultWithCount {
 class QrScanViewModel extends ChangeNotifier {
   final ImagePicker _picker = ImagePicker();
   final QrService _qrService = QrService();
+  final ApiClient _apiClient = ApiClient();
   final QrMlkitService _mlkit_service = QrMlkitService();
   final LocalDbService _localDbService = LocalDbService();
 
@@ -587,7 +589,7 @@ class QrScanViewModel extends ChangeNotifier {
   // 1. Kullanıcının dış IP adresini öğrenmek için yardımcı fonksiyon
   Future<String> getPublicIP() async {
     try {
-      final response = await http.get(Uri.parse('https://api.ipify.org')).timeout(const Duration(seconds: 5));
+      final response = await http.get(Uri.parse(ExternalUrls.publicIp)).timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         return response.body;
       }
@@ -615,18 +617,11 @@ class QrScanViewModel extends ChangeNotifier {
     final String gln = prefs.getString(glnKey)?.trim() ?? "";
     final String pass = prefs.getString(passKey)?.trim() ?? "";
 
-    // İTS Resmi Servisleri
-    const String tokenUrl = "https://its2.saglik.gov.tr/token/app/token/";
-    const String statusUrl = "https://its2.saglik.gov.tr/reference/app/check_status/";
-
-    // 🔹 Senin Backend URL'in (AuthService'deki gibi ApiConstants'tan alıyoruz)
-    final String backendResolveUrl = '${ApiConstants.baseUrl}/api/its/resolve-code';
-
     try {
       print("🔑 [ADIM 1] İTS Token İsteniyor...");
 
       final tokenResponse = await http.post(
-        Uri.parse(tokenUrl),
+        Uri.parse(ExternalUrls.itsToken),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           "username": gln,
@@ -654,7 +649,7 @@ class QrScanViewModel extends ChangeNotifier {
         };
 
         final response = await http.post(
-          Uri.parse(statusUrl),
+          Uri.parse(ExternalUrls.itsCheckStatus),
           headers: {
             'Content-Type': 'application/json',
             'Authorization': 'Bearer $accessToken',
@@ -671,21 +666,12 @@ class QrScanViewModel extends ChangeNotifier {
           // 🔹 [ADIM 3] UC kodunu Kendi Backend'ine gönder (Ngrok ayarıyla birlikte)
           try {
             print("🌐 [ADIM 3] Backend'den resmi açıklama isteniyor...");
-            final backendResponse = await http.post(
-              Uri.parse(backendResolveUrl),
-              headers: {
-                'Content-Type': 'application/json',
-                'ngrok-skip-browser-warning': 'true', // Ngrok ekranını atlamak için kritik!
-              },
-              body: jsonEncode({"code": uc.toString()}),
-            ).timeout(const Duration(seconds: 10));
-
-            if (backendResponse.statusCode == 200) {
-              final backendData = jsonDecode(backendResponse.body);
-              return backendData['message'] ?? uc.toString();
-            } else {
-              return "Kod: $uc (Açıklama getirilemedi)";
-            }
+            final backendData = await _apiClient.post(ApiConstants.itsResolveCode, {"code": uc.toString()});
+            return backendData['message'] ?? uc.toString();
+          } on ApiException catch (e) {
+            print("⚠️ Backend Hatası: $e");
+            if (e.statusCode != null) return "Kod: $uc (Açıklama getirilemedi)";
+            return "Kod: $uc (Sunucu bağlantı hatası)";
           } catch (e) {
             print("⚠️ Backend Hatası: $e");
             return "Kod: $uc (Sunucu bağlantı hatası)";

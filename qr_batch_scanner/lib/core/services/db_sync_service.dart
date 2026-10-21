@@ -1,13 +1,15 @@
-import 'dart:convert';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants/api_constants.dart';
+import '../network/api_client.dart';
 import 'local_db_service.dart';
 
 /// Backend'deki TİTCK senkronundan gelen güncel ilaç listesini kontrol edip,
 /// gerçekten değiştiyse offline SQLite (ilaclar.db) veritabanını günceller.
 class DbSyncService {
   final LocalDbService _localDb = LocalDbService();
+  final ApiClient _api;
+
+  DbSyncService({ApiClient? apiClient}) : _api = apiClient ?? ApiClient();
 
   /// Telefonda kayıtlı olan versiyon numarası (hiç senkron olmadıysa 0).
   Future<int> getLocalVersion() async {
@@ -38,36 +40,12 @@ class DbSyncService {
   }
 
   Future<int> _fetchRemoteVersion() async {
-    final resp = await http.get(
-      Uri.parse(ApiConstants.dbVersion),
-      headers: {
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': 'true',
-      },
-    ).timeout(const Duration(seconds: 10));
-
-    if (resp.statusCode != 200) {
-      throw Exception('Versiyon bilgisi alınamadı (${resp.statusCode})');
-    }
-
-    final decoded = jsonDecode(resp.body) as Map<String, dynamic>;
+    final decoded = await _api.get(ApiConstants.dbVersion);
     return decoded['version'] as int? ?? 0;
   }
 
   Future<List<Map<String, dynamic>>> _fetchAllDrugs() async {
-    final resp = await http.get(
-      Uri.parse(ApiConstants.dbExport),
-      headers: {
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': 'true',
-      },
-    ).timeout(const Duration(seconds: 60));
-
-    if (resp.statusCode != 200) {
-      throw Exception('İlaç listesi indirilemedi (${resp.statusCode})');
-    }
-
-    final decoded = jsonDecode(resp.body) as Map<String, dynamic>;
+    final decoded = await _api.get(ApiConstants.dbExport, timeout: const Duration(seconds: 60));
     final List<dynamic> items = decoded['items'] as List<dynamic>? ?? [];
     return items.map((item) {
       final map = item as Map<String, dynamic>;

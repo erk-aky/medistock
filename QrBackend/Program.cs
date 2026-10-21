@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Collections.Generic;
 using System.Net.Sockets;
+using QrBackend.Middleware;
 using QrBackend.Services; // Senin orijinal namespace'in
 using QrBackend.Models;   // Senin orijinal namespace'in
 
@@ -15,6 +16,8 @@ var builder = WebApplication.CreateBuilder(args);
 
 // --- SERVİS KAYITLARI ---
 builder.Services.AddControllers();
+builder.Services.AddExceptionHandler<ApiExceptionHandler>();
+builder.Services.AddProblemDetails();
 builder.Services.AddScoped<EmailService>();
 // YENİ: ItsService Kaydı eklendi
 builder.Services.AddScoped<IItsService, ItsService>(); 
@@ -53,6 +56,8 @@ builder.Services.AddSingleton<TitckSyncService>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<TitckSyncService>());
 
 var app = builder.Build();
+
+app.UseExceptionHandler();
 
 // --- ENDPOINTLER ---
 app.MapGet("/", () => "Backend JSON Modunda Calisiyor");

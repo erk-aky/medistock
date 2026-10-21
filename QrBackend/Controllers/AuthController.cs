@@ -18,80 +18,57 @@ namespace QrBackend.Controllers
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {
-            try
-            {
-                var user = await _authService.LoginAsync(request.UsernameOrEmail, request.Password);
+            var (status, user) = await _authService.LoginAsync(request.UsernameOrEmail, request.Password);
 
-                if (user != null)
-                {
-                    return Ok(new { 
-                        success = true, 
-                        id = user.Id,
-                        username = user.Username,
-                        email = user.Email,
-                        subscriptionStatus = user.SubscriptionStatus,
-                        trialEndDate = user.TrialEndDate,
-                        subscriptionEndDate = user.SubscriptionEndDate
-                    });
-                }
+            if (status == LoginStatus.EmailNotConfirmed)
+                return StatusCode(403, new { success = false, message = "Lütfen e-posta adresinizi onaylayın." });
 
+            if (status != LoginStatus.Success || user == null)
                 return Unauthorized(new { success = false, message = "Kullanıcı adı veya şifre hatalı" });
-            }
-            catch (Exception ex)
-            {
-                // AuthService içindeki "Lütfen e-posta adresinizi onaylayın" hatasını yakalayıp döner
-                return BadRequest(new { success = false, message = ex.Message });
-            }
+
+            return Ok(new {
+                success = true,
+                id = user.Id,
+                username = user.Username,
+                email = user.Email,
+                subscriptionStatus = user.SubscriptionStatus,
+                trialEndDate = user.TrialEndDate,
+                subscriptionEndDate = user.SubscriptionEndDate
+            });
         }
 
         // ✅ YENİ: E-POSTA DOĞRULAMA ENDPOINT'İ
         [HttpPost("verify-email")]
         public async Task<IActionResult> VerifyEmail([FromBody] VerifyEmailRequest request)
         {
-            try
-            {
-                var result = await _authService.VerifyEmailAsync(request.Ticket, request.Code);
-                
-                if (result.Success)
-                {
-                    return Ok(new { success = true, message = result.Message });
-                }
+            var result = await _authService.VerifyEmailAsync(request.Ticket, request.Code);
 
-                return BadRequest(new { success = false, message = result.Message });
-            }
-            catch (Exception ex)
+            if (result.Success)
             {
-                Console.WriteLine($"Verify Email Error: {ex.Message}");
-                return StatusCode(500, new { success = false, message = "Doğrulama sırasında hata oluştu" });
+                return Ok(new { success = true, message = result.Message });
             }
+
+            return BadRequest(new { success = false, message = result.Message });
         }
 
         [HttpGet("profile/{username}")]
         public async Task<IActionResult> GetProfile(string username)
         {
-            try
-            {
-                var user = await _authService.GetUserByUsernameAsync(username);
+            var user = await _authService.GetUserByUsernameAsync(username);
 
-                if (user != null)
-                {
-                    return Ok(new { 
-                        success = true, 
-                        username = user.Username,
-                        email = user.Email,
-                        subscriptionStatus = user.SubscriptionStatus,
-                        trialEndDate = user.TrialEndDate,
-                        subscriptionEndDate = user.SubscriptionEndDate
-                    });
-                }
-
-                return NotFound(new { success = false, message = "Kullanıcı bulunamadı" });
-            }
-            catch (Exception ex)
+            if (user != null)
             {
-                Console.WriteLine($"Profile Error: {ex.Message}");
-                return StatusCode(500, new { success = false, message = "Profil bilgileri alınırken hata oluştu" });
+                return Ok(new {
+                    success = true,
+                    username = user.Username,
+                    email = user.Email,
+                    subscriptionStatus = user.SubscriptionStatus,
+                    trialEndDate = user.TrialEndDate,
+                    subscriptionEndDate = user.SubscriptionEndDate
+                });
             }
+
+            return NotFound(new { success = false, message = "Kullanıcı bulunamadı" });
         }
 
         [HttpPut("update-profile")]
@@ -107,64 +84,40 @@ namespace QrBackend.Controllers
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] RegisterRequest request)
         {
-            try
-            {
-                var result = await _authService.RegisterAsync(request);
+            var result = await _authService.RegisterAsync(request);
 
-                if (result.Success)
-                {
-                    return Ok(new { success = true, message = result.Message, ticket = result.Ticket });
-                }
-
-                return BadRequest(new { success = false, message = result.Message });
-            }
-            catch (Exception ex)
+            if (result.Success)
             {
-                Console.WriteLine($"Register Error: {ex.Message}");
-                return StatusCode(500, new { success = false, message = "Kayıt sırasında bir hata oluştu" });
+                return Ok(new { success = true, message = result.Message, ticket = result.Ticket });
             }
+
+            return BadRequest(new { success = false, message = result.Message });
         }
 
         [HttpPost("forgot-password")]
         public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request)
         {
-            try
-            {
-                var result = await _authService.GenerateForgotPasswordCodeAsync(request.Email);
-                
-                if (result.Success)
-                {
-                    return Ok(new { success = true, message = result.Message });
-                }
+            var result = await _authService.GenerateForgotPasswordCodeAsync(request.Email);
 
-                return BadRequest(new { success = false, message = result.Message });
-            }
-            catch (Exception ex)
+            if (result.Success)
             {
-                Console.WriteLine($"Forgot Password Error: {ex.Message}");
-                return StatusCode(500, new { success = false, message = "İşlem sırasında bir hata oluştu" });
+                return Ok(new { success = true, message = result.Message });
             }
+
+            return BadRequest(new { success = false, message = result.Message });
         }
 
         [HttpPost("reset-password")]
         public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request)
         {
-            try
-            {
-                var result = await _authService.ResetPasswordWithCodeAsync(request.Email, request.Code, request.NewPassword);
-                
-                if (result.Success)
-                {
-                    return Ok(new { success = true, message = result.Message });
-                }
+            var result = await _authService.ResetPasswordWithCodeAsync(request.Email, request.Code, request.NewPassword);
 
-                return BadRequest(new { success = false, message = result.Message });
-            }
-            catch (Exception ex)
+            if (result.Success)
             {
-                Console.WriteLine($"Reset Password Error: {ex.Message}");
-                return StatusCode(500, new { success = false, message = "Şifre sıfırlama sırasında bir hata oluştu" });
+                return Ok(new { success = true, message = result.Message });
             }
+
+            return BadRequest(new { success = false, message = result.Message });
         }
     }
 

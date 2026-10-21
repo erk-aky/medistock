@@ -4,6 +4,8 @@ using BCrypt.Net;
 
 namespace QrBackend.Services
 {
+    public enum LoginStatus { Success, InvalidCredentials, EmailNotConfirmed }
+
     public class AuthService
     {
         private readonly string _connectionString;
@@ -47,7 +49,8 @@ namespace QrBackend.Services
             };
         }
 
-        public async Task<User?> LoginAsync(string usernameOrEmail, string password)
+        // Kullanıcı adı veya e-posta ile girişi kontrol eder, sonucu ve kullanıcıyı döner
+        public async Task<(LoginStatus Status, User? User)> LoginAsync(string usernameOrEmail, string password)
         {
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync();
@@ -59,18 +62,18 @@ namespace QrBackend.Services
 
             await using var reader = await cmd.ExecuteReaderAsync();
 
-            if (!await reader.ReadAsync()) return null;
+            if (!await reader.ReadAsync()) return (LoginStatus.InvalidCredentials, null);
 
             // Önce onay kontrolü
             bool isConfirmed = reader.GetBoolean(7);
-            if (!isConfirmed) throw new Exception("Lütfen e-posta adresinizi onaylayın.");
+            if (!isConfirmed) return (LoginStatus.EmailNotConfirmed, null);
 
             var dbPasswordHash = reader.GetString(2);
 
             if (!BCrypt.Net.BCrypt.Verify(password, dbPasswordHash))
-                return null;
+                return (LoginStatus.InvalidCredentials, null);
 
-            return new User
+            return (LoginStatus.Success, new User
             {
                 Id = reader.GetInt32(0),
                 Username = reader.GetString(1),
@@ -80,7 +83,7 @@ namespace QrBackend.Services
                 TrialEndDate = reader.IsDBNull(5) ? null : reader.GetDateTime(5),
                 SubscriptionEndDate = reader.IsDBNull(6) ? null : reader.GetDateTime(6),
                 IsEmailConfirmed = isConfirmed
-            };
+            });
         }
 
         // Kullanıcıyı kaydetmeden onay kodunu mail atar ve onay için gereken bileti döner

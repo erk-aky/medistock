@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants/api_constants.dart';
@@ -31,7 +32,7 @@ class AuthService {
     if (resp.statusCode == 200) {
       return decoded;
     } else {
-      throw Exception(decoded['message'] ?? 'Doğrulama kodu hatalı');
+      throw Exception(_errorMessage(decoded, 'Doğrulama kodu hatalı'));
     }
   }
 
@@ -67,7 +68,7 @@ class AuthService {
       
       return decoded;
     } else {
-      throw Exception(decoded['message'] ?? 'Profil güncellenemedi');
+      throw Exception(_errorMessage(decoded, 'Profil güncellenemedi'));
     }
   }
 
@@ -136,7 +137,7 @@ class AuthService {
       return decoded;
     } else {
       // Backend'den gelen spesifik hata mesajını (örneğin: "Email onaylanmadı") fırlatır
-      throw Exception(decoded['message'] ?? 'Giriş başarısız');
+      throw Exception(_errorMessage(decoded, 'Giriş başarısız'));
     }
   }
 
@@ -162,7 +163,7 @@ class AuthService {
     if (resp.statusCode == 200) {
       return decoded;
     } else {
-      throw Exception(decoded['message'] ?? 'Kayıt başarısız');
+      throw Exception(_errorMessage(decoded, 'Kayıt başarısız'));
     }
   }
 
@@ -184,7 +185,7 @@ class AuthService {
     if (resp.statusCode == 200) {
       return decoded;
     } else {
-      throw Exception(decoded['message'] ?? 'Kod gönderilemedi');
+      throw Exception(_errorMessage(decoded, 'Kod gönderilemedi'));
     }
   }
 
@@ -210,7 +211,7 @@ class AuthService {
     if (resp.statusCode == 200) {
       return decoded;
     } else {
-      throw Exception(decoded['message'] ?? 'Şifre güncellenemedi');
+      throw Exception(_errorMessage(decoded, 'Şifre güncellenemedi'));
     }
   }
 
@@ -255,5 +256,13 @@ class AuthService {
   Future<int?> getUserId() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt('userId');
+  }
+
+  // Sunucunun hata mesajını döner, geliştirme modunda varsa teknik detayı da altına ekler
+  String _errorMessage(Map<String, dynamic> decoded, String fallback) {
+    final message = decoded['message']?.toString() ?? fallback;
+    final detail = decoded['detail']?.toString();
+    if (kDebugMode && detail != null) return '$message\n$detail';
+    return message;
   }
 }

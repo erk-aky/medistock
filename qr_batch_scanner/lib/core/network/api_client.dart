@@ -9,8 +9,12 @@ import 'token_store.dart';
 class ApiException implements Exception {
   final String message;
   final int? statusCode;
+  final Map<String, dynamic>? body;
 
-  const ApiException(this.message, {this.statusCode});
+  const ApiException(this.message, {this.statusCode, this.body});
+
+  // Sunucunun bildirdiği kalan kod deneme hakkını döner, yoksa null döner
+  int? get remainingAttempts => body?['remainingAttempts'] as int?;
 
   @override
   String toString() => message;
@@ -126,7 +130,7 @@ class ApiClient {
     }
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw ApiException(errorMessage(decoded, 'Sunucu hatası (${response.statusCode}).'), statusCode: response.statusCode);
+      throw ApiException(errorMessage(decoded, 'Sunucu hatası (${response.statusCode}).'), statusCode: response.statusCode, body: decoded);
     }
     return decoded;
   }

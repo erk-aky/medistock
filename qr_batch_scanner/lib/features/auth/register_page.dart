@@ -187,6 +187,7 @@ class _RegisterPageState extends State<RegisterPage> {
           onVerify: _handleVerify,
           onResend: _handleResend,
           isLoading: viewModel.isLoading,
+          attemptsLeft: viewModel.codeAttemptsLeft,
         ),
         const SizedBox(height: 8),
         TextButton(

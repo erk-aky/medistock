@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../core/network/api_client.dart';
 import '../../core/services/auth_service.dart';
 
 class AuthViewModel extends ChangeNotifier {
@@ -42,6 +43,9 @@ class AuthViewModel extends ChangeNotifier {
   String? _registrationTicket;
   String? _emailChangeTicket;
 
+  int? _codeAttemptsLeft;
+  int? get codeAttemptsLeft => _codeAttemptsLeft;
+
   static const _keyLoggedIn = 'isLoggedIn';
   static const _keyUsername = 'username';
   static const _keyEmail = 'userEmail'; 
@@ -74,6 +78,7 @@ class AuthViewModel extends ChangeNotifier {
     try {
       final resp = await _authService.verifyEmail(_registrationTicket ?? '', code);
       _isLoading = false;
+      _codeAttemptsLeft = null;
       if (resp['success'] == true) {
         _registrationTicket = null;
         notifyListeners();
@@ -84,6 +89,7 @@ class AuthViewModel extends ChangeNotifier {
         return false;
       }
     } catch (e) {
+      if (e is ApiException) _codeAttemptsLeft = e.remainingAttempts;
       _isLoading = false;
       _error = e.toString().replaceAll("Exception:", "");
       notifyListeners();
@@ -256,6 +262,7 @@ class AuthViewModel extends ChangeNotifier {
     try {
       final resp = await _authService.requestEmailChange(newEmail);
       _emailChangeTicket = resp['ticket']?.toString();
+      _codeAttemptsLeft = null;
       _isLoading = false;
       notifyListeners();
       return true;
@@ -276,6 +283,7 @@ class AuthViewModel extends ChangeNotifier {
     try {
       await _authService.confirmEmailChange(_emailChangeTicket ?? '', code);
       _emailChangeTicket = null;
+      _codeAttemptsLeft = null;
       _email = newEmail.trim().toLowerCase();
 
       final prefs = await SharedPreferences.getInstance();
@@ -286,6 +294,7 @@ class AuthViewModel extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
+      if (e is ApiException) _codeAttemptsLeft = e.remainingAttempts;
       _error = e.toString().replaceAll("Exception:", "");
       _isLoading = false;
       notifyListeners();
@@ -302,6 +311,7 @@ class AuthViewModel extends ChangeNotifier {
       final resp = await _authService.register(username, email, password);
       if (resp['success'] == true) {
         _registrationTicket = resp['ticket']?.toString();
+        _codeAttemptsLeft = null;
         _isLoading = false;
         notifyListeners();
         return true;

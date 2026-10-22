@@ -66,4 +66,26 @@ void main() {
     await tester.pump();
     expect(find.text('Kodu tekrar gönder (kalan hak: 3)'), findsOneWidget);
   });
+
+  testWidgets('kodun hakkı bitince alan ve doğrula butonu kapanır', (tester) async {
+    var verifyCalled = false;
+    await tester.pumpWidget(_wrap(VerificationCodeForm(
+      onVerify: (_) async {
+        verifyCalled = true;
+        return false;
+      },
+      onResend: () async => true,
+      isLoading: false,
+      attemptsLeft: 0,
+      verifyLabel: 'Şifreyi Güncelle',
+    )));
+
+    expect(find.text('Kod 3 kez yanlış girildi, lütfen yeni kod isteyin.'), findsOneWidget);
+    expect(tester.widget<TextField>(find.byType(TextField)).enabled, isFalse);
+    await tester.tap(find.text('Şifreyi Güncelle'));
+    await tester.pump();
+    expect(verifyCalled, isFalse);
+
+    await tester.pump(const Duration(seconds: 60));
+  });
 }

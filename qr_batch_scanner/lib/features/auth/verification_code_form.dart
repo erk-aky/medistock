@@ -5,12 +5,16 @@ class VerificationCodeForm extends StatefulWidget {
   final Future<bool> Function(String code) onVerify;
   final Future<bool> Function() onResend;
   final bool isLoading;
+  final int? attemptsLeft;
+  final String verifyLabel;
 
   const VerificationCodeForm({
     super.key,
     required this.onVerify,
     required this.onResend,
     required this.isLoading,
+    this.attemptsLeft,
+    this.verifyLabel = 'Kodu Doğrula',
   });
 
   @override
@@ -77,12 +81,15 @@ class _VerificationCodeFormState extends State<VerificationCodeForm> {
 
   @override
   Widget build(BuildContext context) {
+    final codeUsedUp = widget.attemptsLeft == 0;
+
     return Form(
       key: _formKey,
       child: Column(
         children: [
           TextFormField(
             controller: _codeController,
+            enabled: !codeUsedUp,
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 8),
             decoration: InputDecoration(
@@ -99,6 +106,15 @@ class _VerificationCodeFormState extends State<VerificationCodeForm> {
             maxLength: 6,
             validator: (v) => v!.length < 6 ? '6 haneli kodu girin' : null,
           ),
+          if (codeUsedUp)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Text(
+                'Kod 3 kez yanlış girildi, lütfen yeni kod isteyin.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w600),
+              ),
+            ),
           const SizedBox(height: 40),
           SizedBox(
             width: double.infinity,
@@ -110,10 +126,10 @@ class _VerificationCodeFormState extends State<VerificationCodeForm> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
                 elevation: 3,
               ),
-              onPressed: widget.isLoading ? null : _verify,
+              onPressed: (widget.isLoading || codeUsedUp) ? null : _verify,
               child: widget.isLoading
                   ? const CircularProgressIndicator(color: Colors.white)
-                  : const Text('Kodu Doğrula', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  : Text(widget.verifyLabel, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             ),
           ),
           const SizedBox(height: 16),

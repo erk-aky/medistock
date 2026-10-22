@@ -47,6 +47,7 @@ builder.Services.AddSingleton<IItsService>(provider =>
 builder.Services.AddDataProtection().SetApplicationName("QrBackend");
 builder.Services.AddSingleton<RegistrationTicketService>();
 builder.Services.AddSingleton<EmailChangeTicketService>();
+builder.Services.AddSingleton<AttemptLimiter>();
 builder.Services.AddSingleton<EmailCooldown>();
 
 // --- OTURUM / TOKEN ---
@@ -86,7 +87,8 @@ builder.Services.AddScoped<AuthService>(provider =>
     var emailCooldown = provider.GetRequiredService<EmailCooldown>();
     var tokenService = provider.GetRequiredService<TokenService>();
     var emailChangeTickets = provider.GetRequiredService<EmailChangeTicketService>();
-    return new AuthService(connString, emailService, ticketService, emailCooldown, tokenService, emailChangeTickets);
+    var attemptLimiter = provider.GetRequiredService<AttemptLimiter>();
+    return new AuthService(connString, emailService, ticketService, emailCooldown, tokenService, emailChangeTickets, attemptLimiter);
 });
 
 builder.Services.AddScoped<DrugRepository>(provider =>

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../../core/constants/validation_constants.dart';
+import '../../../core/network/api_client.dart';
 import '../../../core/services/auth_service.dart';
+import 'verification_code_form.dart';
 
 class ForgotPasswordPage extends StatefulWidget {
   const ForgotPasswordPage({super.key});
@@ -11,12 +13,19 @@ class ForgotPasswordPage extends StatefulWidget {
 
 class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   final _emailController = TextEditingController();
-  final _codeController = TextEditingController();
   final _newPasswordController = TextEditingController();
   final _authService = AuthService();
 
   bool _isCodeSent = false;
   bool _isLoading = false;
+  int? _attemptsLeft;
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _newPasswordController.dispose();
+    super.dispose();
+  }
 
   void _showMsg(String msg, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -44,25 +53,45 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   }
 
   // Aşama 2: Kodu ve Yeni Şifreyi Onayla
-  Future<void> _resetPassword() async {
-    if (_codeController.text.isEmpty || _newPasswordController.text.isEmpty) return;
+  Future<bool> _resetPassword(String code) async {
     if (_newPasswordController.text.trim().length < minPasswordLength) {
       _showMsg('Şifre en az $minPasswordLength karakter olmalıdır', isError: true);
-      return;
+      return false;
     }
     setState(() => _isLoading = true);
     try {
       await _authService.resetPassword(
         _emailController.text.trim(),
-        _codeController.text.trim(),
+        code,
         _newPasswordController.text.trim(),
       );
+      if (!mounted) return true;
       _showMsg('Şifreniz başarıyla güncellendi.');
       Navigator.pop(context); // Giriş ekranına geri dön
+      return true;
     } catch (e) {
-      _showMsg(e.toString(), isError: true);
+      if (e is ApiException && mounted) setState(() => _attemptsLeft = e.remainingAttempts);
+      if (mounted) _showMsg(e.toString(), isError: true);
+      return false;
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  // Aynı adrese yeni kod ister, başarılıysa kod deneme hakkı yenilenir
+  Future<bool> _resendCode() async {
+    setState(() => _isLoading = true);
+    try {
+      await _authService.forgotPassword(_emailController.text.trim());
+      if (!mounted) return true;
+      setState(() => _attemptsLeft = null);
+      _showMsg('Yeni kod gönderildi, önceki kod artık geçersiz.');
+      return true;
+    } catch (e) {
+      if (mounted) _showMsg(e.toString(), isError: true);
+      return false;
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -155,26 +184,6 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
 
                 if (_isCodeSent) ...[
                   const SizedBox(height: 16),
-                  // Kod Giriş Alanı
-                  TextField(
-                    controller: _codeController,
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      labelText: '6 Haneli Doğrulama Kodu',
-                      prefixIcon: const Icon(Icons.security),
-                      filled: true,
-                      fillColor: Colors.white,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(15),
-                        borderSide: BorderSide.none,
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(15),
-                        borderSide: BorderSide(color: const Color(0xFFEF9A9A)),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
                   // Yeni Şifre Alanı
                   TextField(
                     controller: _newPasswordController,
@@ -194,32 +203,40 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                       ),
                     ),
                   ),
-                ],
-
-                const SizedBox(height: 40),
-
-                // İşlem Butonu
-                SizedBox(
-                  width: double.infinity,
-                  height: 55,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _isCodeSent ? Colors.green.shade600 : const Color(0xFFD32F2F),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(15),
-                      ),
-                      elevation: 3,
-                    ),
-                    onPressed: _isLoading ? null : (_isCodeSent ? _resetPassword : _sendCode),
-                    child: _isLoading 
-                      ? const CircularProgressIndicator(color: Colors.white) 
-                      : Text(
-                          _isCodeSent ? 'Şifreyi Güncelle' : 'Doğrulama Kodu Gönder',
-                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                        ),
+                  const SizedBox(height: 24),
+                  VerificationCodeForm(
+                    onVerify: _resetPassword,
+                    onResend: _resendCode,
+                    isLoading: _isLoading,
+                    attemptsLeft: _attemptsLeft,
+                    verifyLabel: 'Şifreyi Güncelle',
                   ),
-                ),
+                ] else ...[
+                  const SizedBox(height: 40),
+
+                  // İşlem Butonu
+                  SizedBox(
+                    width: double.infinity,
+                    height: 55,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFD32F2F),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(15),
+                        ),
+                        elevation: 3,
+                      ),
+                      onPressed: _isLoading ? null : _sendCode,
+                      child: _isLoading
+                        ? const CircularProgressIndicator(color: Colors.white)
+                        : const Text(
+                            'Doğrulama Kodu Gönder',
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

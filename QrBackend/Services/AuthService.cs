@@ -4,7 +4,11 @@ using BCrypt.Net;
 
 namespace QrBackend.Services
 {
-    public enum LoginStatus { Success, InvalidCredentials, EmailNotConfirmed }
+    public enum LoginStatus { Success, InvalidCredentials, EmailNotConfirmed, JustLocked, Locked }
+
+    public record LoginResult(LoginStatus Status, User? User, int RemainingAttempts = 0, TimeSpan? LockedFor = null);
+
+    public record CodeResult(bool Success, string Message, int? RemainingAttempts = null, bool TooManyAttempts = false);
 
     public class AuthService
     {
@@ -14,8 +18,9 @@ namespace QrBackend.Services
         private readonly EmailCooldown _emailCooldown;
         private readonly TokenService _tokenService;
         private readonly EmailChangeTicketService _emailChangeTickets;
+        private readonly AttemptLimiter _attemptLimiter;
 
-        public AuthService(string connectionString, EmailService emailService, RegistrationTicketService ticketService, EmailCooldown emailCooldown, TokenService tokenService, EmailChangeTicketService emailChangeTickets)
+        public AuthService(string connectionString, EmailService emailService, RegistrationTicketService ticketService, EmailCooldown emailCooldown, TokenService tokenService, EmailChangeTicketService emailChangeTickets, AttemptLimiter attemptLimiter)
         {
             _connectionString = connectionString;
             _emailService = emailService;
@@ -23,6 +28,7 @@ namespace QrBackend.Services
             _emailCooldown = emailCooldown;
             _tokenService = tokenService;
             _emailChangeTickets = emailChangeTickets;
+            _attemptLimiter = attemptLimiter;
         }
 
         // Token'dan gelen id ile kullanıcıyı bulur, yoksa null döner
@@ -53,41 +59,56 @@ namespace QrBackend.Services
             };
         }
 
-        // Kullanıcı adı veya e-posta ile girişi kontrol eder, sonucu ve kullanıcıyı döner
-        public async Task<(LoginStatus Status, User? User)> LoginAsync(string usernameOrEmail, string password)
+        // Kullanıcı adı veya e-posta ile girişi kontrol eder, yanlış denemeleri sayıp gerekirse hesabı geçici kilitler
+        public async Task<LoginResult> LoginAsync(string usernameOrEmail, string password)
         {
+            var input = InputRules.NormalizeUsername(usernameOrEmail);
+            var now = DateTimeOffset.UtcNow;
+
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync();
 
             const string sql = "SELECT id, username, password, email, subscription_status, trial_end_date, subscription_end_date, is_email_confirmed FROM app_user WHERE LOWER(username) = LOWER(@value) OR LOWER(email) = LOWER(@value) LIMIT 1;";
 
             await using var cmd = new NpgsqlCommand(sql, conn);
-            cmd.Parameters.AddWithValue("@value", InputRules.NormalizeUsername(usernameOrEmail));
+            cmd.Parameters.AddWithValue("@value", input);
 
-            await using var reader = await cmd.ExecuteReaderAsync();
-
-            if (!await reader.ReadAsync()) return (LoginStatus.InvalidCredentials, null);
-
-            // Önce onay kontrolü
-            bool isConfirmed = reader.GetBoolean(7);
-            if (!isConfirmed) return (LoginStatus.EmailNotConfirmed, null);
-
-            var dbPasswordHash = reader.GetString(2);
-
-            if (!BCrypt.Net.BCrypt.Verify(password, dbPasswordHash))
-                return (LoginStatus.InvalidCredentials, null);
-
-            return (LoginStatus.Success, new User
+            User? user = null;
+            await using (var reader = await cmd.ExecuteReaderAsync())
             {
-                Id = reader.GetInt32(0),
-                Username = reader.GetString(1),
-                Password = dbPasswordHash,
-                Email = reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
-                SubscriptionStatus = reader.IsDBNull(4) ? "None" : reader.GetString(4),
-                TrialEndDate = reader.IsDBNull(5) ? null : reader.GetDateTime(5),
-                SubscriptionEndDate = reader.IsDBNull(6) ? null : reader.GetDateTime(6),
-                IsEmailConfirmed = isConfirmed
-            });
+                if (await reader.ReadAsync())
+                {
+                    user = new User
+                    {
+                        Id = reader.GetInt32(0),
+                        Username = reader.GetString(1),
+                        Password = reader.GetString(2),
+                        Email = reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
+                        SubscriptionStatus = reader.IsDBNull(4) ? "None" : reader.GetString(4),
+                        TrialEndDate = reader.IsDBNull(5) ? null : reader.GetDateTime(5),
+                        SubscriptionEndDate = reader.IsDBNull(6) ? null : reader.GetDateTime(6),
+                        IsEmailConfirmed = reader.GetBoolean(7)
+                    };
+                }
+            }
+
+            var limiterKey = user != null ? $"user:{user.Id}" : $"input:{input}";
+
+            var lockRemaining = _attemptLimiter.LoginLockRemaining(limiterKey, now);
+            if (lockRemaining != null) return new LoginResult(LoginStatus.Locked, null, LockedFor: lockRemaining);
+
+            if (user == null || !BCrypt.Net.BCrypt.Verify(password, user.Password))
+            {
+                var failure = _attemptLimiter.RegisterLoginFailure(limiterKey, now);
+                return failure.LockedFor != null
+                    ? new LoginResult(LoginStatus.JustLocked, null, LockedFor: failure.LockedFor)
+                    : new LoginResult(LoginStatus.InvalidCredentials, null, RemainingAttempts: failure.RemainingAttempts);
+            }
+
+            _attemptLimiter.ResetLogin(limiterKey);
+            if (!user.IsEmailConfirmed) return new LoginResult(LoginStatus.EmailNotConfirmed, null);
+
+            return new LoginResult(LoginStatus.Success, user);
         }
 
         // Kullanıcıyı kaydetmeden onay kodunu mail atar ve onay için gereken bileti döner
@@ -108,6 +129,9 @@ namespace QrBackend.Services
                 if (takenMessage != null) return (false, takenMessage, null);
             }
 
+            var sendBlocked = _attemptLimiter.CodeSendBlockedMessage(CodeFlow.Register, email, DateTimeOffset.UtcNow);
+            if (sendBlocked != null) return (false, sendBlocked, null);
+
             if (!_emailCooldown.TryAcquire(email, DateTimeOffset.UtcNow, out var remaining))
                 return (false, $"Yeni kod için lütfen {remaining} saniye bekleyin.", null);
 
@@ -115,6 +139,7 @@ namespace QrBackend.Services
             try
             {
                 await _emailService.SendConfirmationEmailAsync(email, code);
+                _attemptLimiter.RegisterCodeSent(CodeFlow.Register, email, DateTimeOffset.UtcNow);
             }
             catch (Exception ex)
             {
@@ -130,21 +155,25 @@ namespace QrBackend.Services
         }
 
         // Bilet ve kod doğruysa kullanıcıyı ancak bu anda onaylı olarak kaydeder
-        public async Task<(bool Success, string Message)> VerifyEmailAsync(string ticket, string code)
+        public async Task<CodeResult> VerifyEmailAsync(string ticket, string code)
         {
-            var status = _ticketService.Read(ticket, DateTimeOffset.UtcNow, out var data);
+            var now = DateTimeOffset.UtcNow;
+            var status = _ticketService.Read(ticket, now, out var data);
             if (status == TicketStatus.Expired)
-                return (false, "Kodun süresi doldu, lütfen yeni kod isteyin.");
+                return new CodeResult(false, "Kodun süresi doldu, lütfen yeni kod isteyin.");
             if (status == TicketStatus.Invalid || data == null)
-                return (false, "Geçersiz istek, lütfen kayıt işlemini yeniden başlatın.");
+                return new CodeResult(false, "Geçersiz istek, lütfen kayıt işlemini yeniden başlatın.");
+
+            var blocked = CodeVerifyBlocked(CodeFlow.Register, data.Email, now);
+            if (blocked != null) return blocked;
             if (data.Code != code)
-                return (false, "Doğrulama kodu hatalı.");
+                return WrongCode(CodeFlow.Register, data.Email, now, "Doğrulama kodu hatalı.");
 
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync();
 
             var takenMessage = await CheckUsernameAndEmailTakenAsync(conn, data.Username, data.Email);
-            if (takenMessage != null) return (false, takenMessage);
+            if (takenMessage != null) return new CodeResult(false, takenMessage);
 
             const string insertSql = @"INSERT INTO app_user (username, password, email, subscription_status, trial_end_date, created_at, email_confirmation_code, is_email_confirmed)
                                      VALUES (@username, @password, @email, @subStatus, @trialEnd, @createdAt, NULL, true)";
@@ -163,10 +192,11 @@ namespace QrBackend.Services
             }
             catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
             {
-                return (false, "Bu kullanıcı adı veya e-posta az önce başkası tarafından alındı.");
+                return new CodeResult(false, "Bu kullanıcı adı veya e-posta az önce başkası tarafından alındı.");
             }
 
-            return (true, "E-posta başarıyla doğrulandı.");
+            _attemptLimiter.ResetCode(CodeFlow.Register, data.Email);
+            return new CodeResult(true, "E-posta başarıyla doğrulandı.");
         }
 
         // Kullanıcı adı veya e-posta kullanımdaysa uygun mesajı, boştaysa null döner
@@ -253,6 +283,9 @@ namespace QrBackend.Services
                     return (false, "Bu e-posta adresi zaten kullanımda.", null);
             }
 
+            var sendBlocked = _attemptLimiter.CodeSendBlockedMessage(CodeFlow.EmailChange, userId.ToString(), DateTimeOffset.UtcNow);
+            if (sendBlocked != null) return (false, sendBlocked, null);
+
             if (!_emailCooldown.TryAcquire(email, DateTimeOffset.UtcNow, out var remaining))
                 return (false, $"Yeni kod için lütfen {remaining} saniye bekleyin.", null);
 
@@ -260,6 +293,7 @@ namespace QrBackend.Services
             try
             {
                 await _emailService.SendEmailChangeCodeAsync(email, code);
+                _attemptLimiter.RegisterCodeSent(CodeFlow.EmailChange, userId.ToString(), DateTimeOffset.UtcNow);
             }
             catch (Exception ex)
             {
@@ -272,20 +306,24 @@ namespace QrBackend.Services
         }
 
         // Bilet ve kod doğruysa ve adres bilet alındığından beri değişmediyse e-postayı değiştirir, eski adrese bilgilendirme maili atar
-        public async Task<(bool Success, string Message)> ConfirmEmailChangeAsync(int userId, string ticket, string code)
+        public async Task<CodeResult> ConfirmEmailChangeAsync(int userId, string ticket, string code)
         {
-            var status = _emailChangeTickets.Read(ticket, DateTimeOffset.UtcNow, out var data);
+            var now = DateTimeOffset.UtcNow;
+            var status = _emailChangeTickets.Read(ticket, now, out var data);
             if (status == TicketStatus.Expired)
-                return (false, "Kodun süresi doldu, lütfen yeni kod isteyin.");
+                return new CodeResult(false, "Kodun süresi doldu, lütfen yeni kod isteyin.");
             if (status == TicketStatus.Invalid || data == null || data.UserId != userId)
-                return (false, "Geçersiz istek, lütfen e-posta değişikliğini yeniden başlatın.");
+                return new CodeResult(false, "Geçersiz istek, lütfen e-posta değişikliğini yeniden başlatın.");
+
+            var blocked = CodeVerifyBlocked(CodeFlow.EmailChange, userId.ToString(), now);
+            if (blocked != null) return blocked;
             if (data.Code != code)
-                return (false, "Doğrulama kodu hatalı.");
+                return WrongCode(CodeFlow.EmailChange, userId.ToString(), now, "Doğrulama kodu hatalı.");
 
             var user = await GetUserByIdAsync(userId);
-            if (user == null) return (false, "Kullanıcı bulunamadı.");
+            if (user == null) return new CodeResult(false, "Kullanıcı bulunamadı.");
             if (!string.Equals(user.Email, data.OldEmail, StringComparison.OrdinalIgnoreCase))
-                return (false, "Geçersiz istek, lütfen e-posta değişikliğini yeniden başlatın.");
+                return new CodeResult(false, "Geçersiz istek, lütfen e-posta değişikliğini yeniden başlatın.");
 
             await using (var conn = new NpgsqlConnection(_connectionString))
             {
@@ -302,13 +340,15 @@ namespace QrBackend.Services
                 try
                 {
                     if (await cmd.ExecuteNonQueryAsync() == 0)
-                        return (false, "Bu e-posta adresi zaten kullanımda.");
+                        return new CodeResult(false, "Bu e-posta adresi zaten kullanımda.");
                 }
                 catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
                 {
-                    return (false, "Bu e-posta adresi zaten kullanımda.");
+                    return new CodeResult(false, "Bu e-posta adresi zaten kullanımda.");
                 }
             }
+
+            _attemptLimiter.ResetCode(CodeFlow.EmailChange, userId.ToString());
 
             if (!string.IsNullOrWhiteSpace(user.Email))
             {
@@ -322,7 +362,24 @@ namespace QrBackend.Services
                 }
             }
 
-            return (true, "E-posta adresiniz başarıyla değiştirildi.");
+            return new CodeResult(true, "E-posta adresiniz başarıyla değiştirildi.");
+        }
+
+        // Bu akışta kod denenemiyorsa kullanıcıya dönülecek sonucu, denenebiliyorsa null döner
+        private CodeResult? CodeVerifyBlocked(CodeFlow flow, string key, DateTimeOffset now)
+        {
+            var message = _attemptLimiter.CodeVerifyBlockedMessage(flow, key, now);
+            if (message == null) return null;
+            return new CodeResult(false, message, 0, message != AttemptLimiter.CodeUsedUpMessage);
+        }
+
+        // Yanlış kodu sayar, kalan hakka göre kullanıcıya gösterilecek sonucu hazırlar
+        private CodeResult WrongCode(CodeFlow flow, string key, DateTimeOffset now, string wrongMessage)
+        {
+            var failure = _attemptLimiter.RegisterWrongCode(flow, key, now);
+            if (failure.Blocked) return new CodeResult(false, AttemptLimiter.BlockedMessage(AttemptLimiter.CodeBlock), 0, true);
+            if (failure.RemainingAttempts == 0) return new CodeResult(false, AttemptLimiter.CodeUsedUpMessage, 0);
+            return new CodeResult(false, $"{wrongMessage} Kalan hak: {failure.RemainingAttempts}", failure.RemainingAttempts);
         }
 
         // E-posta başka bir kullanıcıda kayıtlıysa true döner
@@ -352,6 +409,9 @@ namespace QrBackend.Services
 
             if (userId == null) return (false, "Bu e-posta adresiyle kayıtlı bir kullanıcı bulunamadı.");
 
+            var sendBlocked = _attemptLimiter.CodeSendBlockedMessage(CodeFlow.ResetPassword, email, DateTimeOffset.UtcNow);
+            if (sendBlocked != null) return (false, sendBlocked);
+
             if (!_emailCooldown.TryAcquire(email, DateTimeOffset.UtcNow, out var remaining))
                 return (false, $"Yeni kod için lütfen {remaining} saniye bekleyin.");
 
@@ -368,6 +428,7 @@ namespace QrBackend.Services
             try
             {
                 await _emailService.SendResetEmailAsync(email, resetCode);
+                _attemptLimiter.RegisterCodeSent(CodeFlow.ResetPassword, email, DateTimeOffset.UtcNow);
                 return (true, "Şifre sıfırlama kodu e-posta adresinize gönderildi.");
             }
             catch (Exception ex)
@@ -379,11 +440,15 @@ namespace QrBackend.Services
         }
 
         // Kod doğruysa şifreyi değiştirir ve kullanıcının bütün oturumlarını kapatır
-        public async Task<(bool Success, string Message)> ResetPasswordWithCodeAsync(string rawEmail, string code, string newPassword)
+        public async Task<CodeResult> ResetPasswordWithCodeAsync(string rawEmail, string code, string newPassword)
         {
+            var now = DateTimeOffset.UtcNow;
             var email = InputRules.NormalizeEmail(rawEmail);
             var passwordError = InputRules.ValidatePassword(newPassword);
-            if (passwordError != null) return (false, passwordError);
+            if (passwordError != null) return new CodeResult(false, passwordError);
+
+            var blocked = CodeVerifyBlocked(CodeFlow.ResetPassword, email, now);
+            if (blocked != null) return blocked;
 
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync();
@@ -395,7 +460,7 @@ namespace QrBackend.Services
             verifyCmd.Parameters.AddWithValue("@now", DateTime.Now);
 
             var userId = await verifyCmd.ExecuteScalarAsync();
-            if (userId == null) return (false, "Kod hatalı veya süresi dolmuş.");
+            if (userId == null) return WrongCode(CodeFlow.ResetPassword, email, now, "Kod hatalı veya süresi dolmuş.");
 
             string newPasswordHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
             const string updateSql = "UPDATE app_user SET password = @password, reset_token = NULL, token_expiry = NULL WHERE id = @id";
@@ -406,8 +471,9 @@ namespace QrBackend.Services
             await updateCmd.ExecuteNonQueryAsync();
 
             await _tokenService.RevokeAllAsync((int)userId, DateTimeOffset.UtcNow);
+            _attemptLimiter.ResetCode(CodeFlow.ResetPassword, email);
 
-            return (true, "Şifreniz başarıyla güncellendi.");
+            return new CodeResult(true, "Şifreniz başarıyla güncellendi.");
         }
     }
 }

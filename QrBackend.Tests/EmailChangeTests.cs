@@ -116,12 +116,45 @@ namespace QrBackend.Tests
         }
 
         [Fact]
-        public async Task YanlisKod_Reddedilir()
+        public async Task YanlisKod_KalanHakkiylaReddedilir()
         {
-            var ticket = CreateTicket(1, "123456");
-            var (status, message) = await PostAsync("/api/v1/auth/change-email/confirm", new { ticket, code = "654321" }, 1);
+            var ticket = CreateTicket(11, "123456");
+            var (status, message) = await PostAsync("/api/v1/auth/change-email/confirm", new { ticket, code = "654321" }, 11);
             Assert.Equal(HttpStatusCode.BadRequest, status);
-            Assert.Equal("Doğrulama kodu hatalı.", message);
+            Assert.Equal("Doğrulama kodu hatalı. Kalan hak: 2", message);
+        }
+
+        [Fact]
+        public async Task UcYanlistanSonra_DogruKodDaKabulEdilmez()
+        {
+            var ticket = CreateTicket(12, "123456");
+            await PostAsync("/api/v1/auth/change-email/confirm", new { ticket, code = "000001" }, 12);
+            await PostAsync("/api/v1/auth/change-email/confirm", new { ticket, code = "000002" }, 12);
+            var (_, third) = await PostAsync("/api/v1/auth/change-email/confirm", new { ticket, code = "000003" }, 12);
+            Assert.Equal("Kod 3 kez yanlış girildi, lütfen yeni kod isteyin.", third);
+
+            var (status, message) = await PostAsync("/api/v1/auth/change-email/confirm", new { ticket, code = "123456" }, 12);
+            Assert.Equal(HttpStatusCode.BadRequest, status);
+            Assert.Equal("Kod 3 kez yanlış girildi, lütfen yeni kod isteyin.", message);
+        }
+
+        [Fact]
+        public async Task KayitKodu_UcYanlistanSonraKapanir()
+        {
+            string ticket;
+            using (var scope = _factory.Services.CreateScope())
+                ticket = scope.ServiceProvider.GetRequiredService<RegistrationTicketService>().Create("deneme", "kilit@test.com", "hash", "123456", DateTimeOffset.UtcNow);
+
+            for (var i = 1; i <= 2; i++)
+            {
+                var (_, wrong) = await PostAsync("/api/v1/auth/verify-email", new { ticket, code = "00000" + i }, null);
+                Assert.Equal($"Doğrulama kodu hatalı. Kalan hak: {3 - i}", wrong);
+            }
+            await PostAsync("/api/v1/auth/verify-email", new { ticket, code = "000003" }, null);
+
+            var (status, message) = await PostAsync("/api/v1/auth/verify-email", new { ticket, code = "123456" }, null);
+            Assert.Equal(HttpStatusCode.BadRequest, status);
+            Assert.Equal("Kod 3 kez yanlış girildi, lütfen yeni kod isteyin.", message);
         }
     }
 }

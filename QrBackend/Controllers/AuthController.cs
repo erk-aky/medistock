@@ -21,13 +21,21 @@ namespace QrBackend.Controllers
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {
-            var (status, user) = await _authService.LoginAsync(request.UsernameOrEmail, request.Password);
+            var result = await _authService.LoginAsync(request.UsernameOrEmail, request.Password);
+            var user = result.User;
 
-            if (status == LoginStatus.EmailNotConfirmed)
-                return StatusCode(403, new { success = false, message = "Lütfen e-posta adresinizi onaylayın." });
+            switch (result.Status)
+            {
+                case LoginStatus.EmailNotConfirmed:
+                    return StatusCode(403, new { success = false, message = "Lütfen e-posta adresinizi onaylayın." });
+                case LoginStatus.JustLocked:
+                    return StatusCode(429, new { success = false, message = $"Çok fazla yanlış deneme yaptınız, hesabınız {AttemptLimiter.FormatDuration(result.LockedFor!.Value)} kilitlendi." });
+                case LoginStatus.Locked:
+                    return StatusCode(429, new { success = false, message = $"Hesabınız kilitli, {AttemptLimiter.FormatDuration(result.LockedFor!.Value)} sonra tekrar deneyin." });
+            }
 
-            if (status != LoginStatus.Success || user == null)
-                return Unauthorized(new { success = false, message = "Kullanıcı adı veya şifre hatalı" });
+            if (result.Status != LoginStatus.Success || user == null)
+                return Unauthorized(new { success = false, message = $"Kullanıcı adı veya şifre yanlış. Kalan hak: {result.RemainingAttempts}", remainingAttempts = result.RemainingAttempts });
 
             var tokens = await _tokenService.IssueAsync(user.Id, DateTimeOffset.UtcNow);
 
@@ -69,14 +77,7 @@ namespace QrBackend.Controllers
         [HttpPost("verify-email")]
         public async Task<IActionResult> VerifyEmail([FromBody] VerifyEmailRequest request)
         {
-            var result = await _authService.VerifyEmailAsync(request.Ticket, request.Code);
-
-            if (result.Success)
-            {
-                return Ok(new { success = true, message = result.Message });
-            }
-
-            return BadRequest(new { success = false, message = result.Message });
+            return CodeResponse(await _authService.VerifyEmailAsync(request.Ticket, request.Code));
         }
 
         // Token sahibinin profil bilgilerini döner
@@ -126,11 +127,7 @@ namespace QrBackend.Controllers
         [HttpPost("change-email/confirm")]
         public async Task<IActionResult> ConfirmEmailChange([FromBody] VerifyEmailRequest request)
         {
-            var result = await _authService.ConfirmEmailChangeAsync(CurrentUserId, request.Ticket, request.Code);
-            if (!result.Success)
-                return BadRequest(new { success = false, message = result.Message });
-
-            return Ok(new { success = true, message = result.Message });
+            return CodeResponse(await _authService.ConfirmEmailChangeAsync(CurrentUserId, request.Ticket, request.Code));
         }
 
         [AllowAnonymous]
@@ -165,14 +162,16 @@ namespace QrBackend.Controllers
         [HttpPost("reset-password")]
         public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request)
         {
-            var result = await _authService.ResetPasswordWithCodeAsync(request.Email, request.Code, request.NewPassword);
+            return CodeResponse(await _authService.ResetPasswordWithCodeAsync(request.Email, request.Code, request.NewPassword));
+        }
 
-            if (result.Success)
-            {
-                return Ok(new { success = true, message = result.Message });
-            }
-
-            return BadRequest(new { success = false, message = result.Message });
+        // Kod doğrulama sonucunu uygun durum koduyla ve kalan hakla birlikte döner
+        private IActionResult CodeResponse(CodeResult result)
+        {
+            if (result.Success) return Ok(new { success = true, message = result.Message });
+            if (result.TooManyAttempts)
+                return StatusCode(429, new { success = false, message = result.Message, remainingAttempts = 0 });
+            return BadRequest(new { success = false, message = result.Message, remainingAttempts = result.RemainingAttempts });
         }
     }
 

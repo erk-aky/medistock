@@ -64,6 +64,7 @@ class EmailVerificationPage extends StatelessWidget {
               onVerify: (code) => _verify(context, code),
               onResend: () => _resend(context),
               isLoading: authVm.isLoading,
+              attemptsLeft: authVm.codeAttemptsLeft,
             ),
           ],
         ),

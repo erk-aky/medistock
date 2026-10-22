@@ -12,25 +12,27 @@ namespace QrBackend.Services
         private readonly EmailService _emailService;
         private readonly RegistrationTicketService _ticketService;
         private readonly EmailCooldown _emailCooldown;
+        private readonly TokenService _tokenService;
 
-        public AuthService(string connectionString, EmailService emailService, RegistrationTicketService ticketService, EmailCooldown emailCooldown)
+        public AuthService(string connectionString, EmailService emailService, RegistrationTicketService ticketService, EmailCooldown emailCooldown, TokenService tokenService)
         {
             _connectionString = connectionString;
             _emailService = emailService;
             _ticketService = ticketService;
             _emailCooldown = emailCooldown;
+            _tokenService = tokenService;
         }
 
-        public async Task<User?> GetUserByUsernameAsync(string username)
+        // Token'dan gelen id ile kullanıcıyı bulur, yoksa null döner
+        public async Task<User?> GetUserByIdAsync(int userId)
         {
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync();
 
-            // SQL Güncellendi: is_email_confirmed eklendi
-            const string sql = "SELECT id, username, password, email, subscription_status, trial_end_date, subscription_end_date, is_email_confirmed FROM app_user WHERE LOWER(username) = LOWER(@username) LIMIT 1;";
+            const string sql = "SELECT id, username, password, email, subscription_status, trial_end_date, subscription_end_date, is_email_confirmed FROM app_user WHERE id = @id LIMIT 1;";
 
             await using var cmd = new NpgsqlCommand(sql, conn);
-            cmd.Parameters.AddWithValue("@username", username);
+            cmd.Parameters.AddWithValue("@id", userId);
 
             await using var reader = await cmd.ExecuteReaderAsync();
 
@@ -45,7 +47,7 @@ namespace QrBackend.Services
                 SubscriptionStatus = reader.IsDBNull(4) ? "None" : reader.GetString(4),
                 TrialEndDate = reader.IsDBNull(5) ? null : reader.GetDateTime(5),
                 SubscriptionEndDate = reader.IsDBNull(6) ? null : reader.GetDateTime(6),
-                IsEmailConfirmed = reader.GetBoolean(7) // ✅ Onay durumu eklendi
+                IsEmailConfirmed = reader.GetBoolean(7)
             };
         }
 
@@ -192,7 +194,8 @@ namespace QrBackend.Services
             return null;
         }
 
-        public async Task<(bool Success, string Message)> UpdateUserProfile(UpdateProfileRequest request)
+        // Token sahibinin kullanıcı adı ve e-postasını günceller
+        public async Task<(bool Success, string Message)> UpdateUserProfile(int userId, UpdateProfileRequest request)
         {
             var username = InputRules.NormalizeUsername(request.NewUsername);
             var email = InputRules.NormalizeEmail(request.NewEmail);
@@ -213,7 +216,7 @@ namespace QrBackend.Services
             {
                 cmd.Parameters.AddWithValue("@email", email);
                 cmd.Parameters.AddWithValue("@username", username);
-                cmd.Parameters.AddWithValue("@id", request.UserId);
+                cmd.Parameters.AddWithValue("@id", userId);
 
                 await using var reader = await cmd.ExecuteReaderAsync();
                 if (await reader.ReadAsync())
@@ -235,7 +238,7 @@ namespace QrBackend.Services
             {
                 updateCmd.Parameters.AddWithValue("@username", username);
                 updateCmd.Parameters.AddWithValue("@email", email);
-                updateCmd.Parameters.AddWithValue("@id", request.UserId);
+                updateCmd.Parameters.AddWithValue("@id", userId);
 
                 int affectedRows = await updateCmd.ExecuteNonQueryAsync();
                 
@@ -288,6 +291,7 @@ namespace QrBackend.Services
             }
         }
 
+        // Kod doğruysa şifreyi değiştirir ve kullanıcının bütün oturumlarını kapatır
         public async Task<(bool Success, string Message)> ResetPasswordWithCodeAsync(string rawEmail, string code, string newPassword)
         {
             var email = InputRules.NormalizeEmail(rawEmail);
@@ -313,6 +317,8 @@ namespace QrBackend.Services
             updateCmd.Parameters.AddWithValue("@password", newPasswordHash);
             updateCmd.Parameters.AddWithValue("@id", userId);
             await updateCmd.ExecuteNonQueryAsync();
+
+            await _tokenService.RevokeAllAsync((int)userId, DateTimeOffset.UtcNow);
 
             return (true, "Şifreniz başarıyla güncellendi.");
         }

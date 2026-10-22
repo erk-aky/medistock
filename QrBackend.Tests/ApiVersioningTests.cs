@@ -1,21 +1,19 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace QrBackend.Tests
 {
-    public class ApiVersioningTests : IClassFixture<WebApplicationFactory<Program>>
+    public class ApiVersioningTests : IClassFixture<TestApiFactory>
     {
         private const string UnsupportedVersionMessage = "Bu API sürümü desteklenmiyor, lütfen uygulamayı güncelleyin.";
         private const string NotFoundMessage = "İstenen adres bulunamadı.";
 
         private readonly HttpClient _client;
 
-        public ApiVersioningTests(WebApplicationFactory<Program> factory)
+        public ApiVersioningTests(TestApiFactory factory)
         {
-            _client = factory.WithWebHostBuilder(b => b.UseEnvironment("Production")).CreateClient();
+            _client = factory.CreateClient("Production", authorized: true);
         }
 
         private static async Task<string?> MessageAsync(HttpResponseMessage response)

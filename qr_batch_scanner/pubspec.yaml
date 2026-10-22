@@ -60,6 +60,7 @@ dependencies:
   vector_math: ^2.1.4
   excel: ^4.0.0
   file_picker: ^8.0.0
+  flutter_secure_storage: ^10.3.4
   # pubspec.yaml -> dependencies:
 
 

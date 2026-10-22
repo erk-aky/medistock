@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using QrBackend.Middleware;
 using QrBackend.Models;
 using QrBackend.Services;
 
@@ -7,12 +9,15 @@ namespace QrBackend.Controllers
     public class AuthController : ApiControllerBase
     {
         private readonly AuthService _authService;
+        private readonly TokenService _tokenService;
 
-        public AuthController(AuthService authService)
+        public AuthController(AuthService authService, TokenService tokenService)
         {
             _authService = authService;
+            _tokenService = tokenService;
         }
 
+        [AllowAnonymous]
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {
@@ -24,8 +29,12 @@ namespace QrBackend.Controllers
             if (status != LoginStatus.Success || user == null)
                 return Unauthorized(new { success = false, message = "Kullanıcı adı veya şifre hatalı" });
 
+            var tokens = await _tokenService.IssueAsync(user.Id, DateTimeOffset.UtcNow);
+
             return Ok(new {
                 success = true,
+                accessToken = tokens.AccessToken,
+                refreshToken = tokens.RefreshToken,
                 id = user.Id,
                 username = user.Username,
                 email = user.Email,
@@ -35,7 +44,28 @@ namespace QrBackend.Controllers
             });
         }
 
-        // ✅ YENİ: E-POSTA DOĞRULAMA ENDPOINT'İ
+        // Yenileme token'ı geçerliyse yeni bir token çifti verir
+        [AllowAnonymous]
+        [HttpPost("refresh")]
+        public async Task<IActionResult> Refresh([FromBody] RefreshTokenRequest request)
+        {
+            var (status, tokens) = await _tokenService.RefreshAsync(request.RefreshToken, DateTimeOffset.UtcNow);
+            if (status != RefreshStatus.Success || tokens == null)
+                return Unauthorized(ApiResponses.Error(ApiResponses.SessionExpiredMessage));
+
+            return Ok(new { success = true, accessToken = tokens.AccessToken, refreshToken = tokens.RefreshToken });
+        }
+
+        // Çıkış yapılınca telefondaki yenileme token'ını iptal eder
+        [AllowAnonymous]
+        [HttpPost("logout")]
+        public async Task<IActionResult> Logout([FromBody] RefreshTokenRequest request)
+        {
+            await _tokenService.RevokeAsync(request.RefreshToken, DateTimeOffset.UtcNow);
+            return Ok(new { success = true, message = "Çıkış yapıldı." });
+        }
+
+        [AllowAnonymous]
         [HttpPost("verify-email")]
         public async Task<IActionResult> VerifyEmail([FromBody] VerifyEmailRequest request)
         {
@@ -49,15 +79,17 @@ namespace QrBackend.Controllers
             return BadRequest(new { success = false, message = result.Message });
         }
 
-        [HttpGet("profile/{username}")]
-        public async Task<IActionResult> GetProfile(string username)
+        // Token sahibinin profil bilgilerini döner
+        [HttpGet("me")]
+        public async Task<IActionResult> GetProfile()
         {
-            var user = await _authService.GetUserByUsernameAsync(username);
+            var user = await _authService.GetUserByIdAsync(CurrentUserId);
 
             if (user != null)
             {
                 return Ok(new {
                     success = true,
+                    id = user.Id,
                     username = user.Username,
                     email = user.Email,
                     subscriptionStatus = user.SubscriptionStatus,
@@ -72,13 +104,14 @@ namespace QrBackend.Controllers
         [HttpPut("update-profile")]
         public async Task<IActionResult> UpdateProfile([FromBody] UpdateProfileRequest request)
         {
-            var result = await _authService.UpdateUserProfile(request);
+            var result = await _authService.UpdateUserProfile(CurrentUserId, request);
             if (!result.Success)
                 return BadRequest(new { success = false, message = result.Message });
 
             return Ok(new { success = true, message = result.Message });
         }
 
+        [AllowAnonymous]
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] RegisterRequest request)
         {
@@ -92,6 +125,7 @@ namespace QrBackend.Controllers
             return BadRequest(new { success = false, message = result.Message });
         }
 
+        [AllowAnonymous]
         [HttpPost("forgot-password")]
         public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request)
         {
@@ -105,6 +139,7 @@ namespace QrBackend.Controllers
             return BadRequest(new { success = false, message = result.Message });
         }
 
+        [AllowAnonymous]
         [HttpPost("reset-password")]
         public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request)
         {
@@ -119,7 +154,11 @@ namespace QrBackend.Controllers
         }
     }
 
-    // ✅ YENİ: Doğrulama isteği için model
+    public class RefreshTokenRequest
+    {
+        public string RefreshToken { get; set; } = string.Empty;
+    }
+
     public class VerifyEmailRequest
     {
         public string Ticket { get; set; } = string.Empty;

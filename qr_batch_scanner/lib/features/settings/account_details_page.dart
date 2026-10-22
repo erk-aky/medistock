@@ -154,7 +154,7 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
         print("🚀 İstek atılıyor: ${_usernameController.text}");
         
         // Backend'den güncel veriyi çek
-        await authVm.fetchAndUpdateProfile(_usernameController.text);
+        await authVm.fetchAndUpdateProfile();
         
         _showSnackBar("Tüm bilgileriniz başarıyla güncellendi!", Colors.green);
       } else if (mounted && authVm.error != null) {

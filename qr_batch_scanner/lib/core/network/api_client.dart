@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../constants/api_constants.dart';
+import 'token_store.dart';
 
 class ApiException implements Exception {
   final String message;
@@ -17,46 +18,93 @@ class ApiException implements Exception {
 
 class ApiClient {
   static const Duration defaultTimeout = Duration(seconds: 10);
+  static const String sessionExpiredMessage = 'Oturumunuzun süresi doldu, lütfen tekrar giriş yapın.';
   static const Map<String, String> _baseHeaders = {'ngrok-skip-browser-warning': 'true'};
   static const Map<String, String> _jsonHeaders = {..._baseHeaders, 'Content-Type': 'application/json'};
 
+  static void Function()? onSessionExpired;
+
   final http.Client _http;
   final String _baseUrl;
+  final TokenStore _tokens;
 
-  ApiClient({http.Client? httpClient, String? baseUrl})
+  ApiClient({http.Client? httpClient, String? baseUrl, TokenStore? tokenStore})
       : _http = httpClient ?? http.Client(),
-        _baseUrl = baseUrl ?? ApiConstants.baseUrl;
+        _baseUrl = baseUrl ?? ApiConstants.baseUrl,
+        _tokens = tokenStore ?? TokenStore.instance;
 
   // Verilen yolu sunucu adresiyle birleştirip tam adresi döner
   Uri uri(String path) => Uri.parse('$_baseUrl$path');
 
   Future<Map<String, dynamic>> get(String path, {Duration timeout = defaultTimeout}) {
-    return _send(() => _http.get(uri(path), headers: _jsonHeaders), timeout);
+    return _send(path, (auth) => _http.get(uri(path), headers: {..._jsonHeaders, ...auth}), timeout);
   }
 
   Future<Map<String, dynamic>> post(String path, Map<String, dynamic> body, {Duration timeout = defaultTimeout}) {
-    return _send(() => _http.post(uri(path), headers: _jsonHeaders, body: jsonEncode(body)), timeout);
+    return _send(path, (auth) => _http.post(uri(path), headers: {..._jsonHeaders, ...auth}, body: jsonEncode(body)), timeout);
   }
 
   Future<Map<String, dynamic>> put(String path, Map<String, dynamic> body, {Duration timeout = defaultTimeout}) {
-    return _send(() => _http.put(uri(path), headers: _jsonHeaders, body: jsonEncode(body)), timeout);
+    return _send(path, (auth) => _http.put(uri(path), headers: {..._jsonHeaders, ...auth}, body: jsonEncode(body)), timeout);
   }
 
   // Dosyayı form verisi olarak gönderir ve cevabı çözülmüş olarak döner
   Future<Map<String, dynamic>> postFile(String path, String field, String filePath, {Duration timeout = defaultTimeout}) {
-    return _send(() async {
+    return _send(path, (auth) async {
       final request = http.MultipartRequest('POST', uri(path))
-        ..headers.addAll(_baseHeaders)
+        ..headers.addAll({..._baseHeaders, ...auth})
         ..files.add(await http.MultipartFile.fromPath(field, filePath));
       return http.Response.fromStream(await _http.send(request));
     }, timeout);
   }
 
+  // İsteği token ile gönderir, token süresi dolmuşsa bir kez yenileyip isteği tekrarlar
+  Future<Map<String, dynamic>> _send(
+    String path,
+    Future<http.Response> Function(Map<String, String> auth) request,
+    Duration timeout,
+  ) async {
+    if (ApiConstants.publicPaths.contains(path)) return _decode(await _execute(() => request(const {}), timeout));
+
+    final sentToken = await _tokens.accessToken;
+    var response = await _execute(() => request(_authHeader(sentToken)), timeout);
+
+    if (response.statusCode == 401 && sentToken != null) {
+      if (sentToken == await _tokens.accessToken && !await _tokens.refreshOnce(() => _refreshTokens(timeout))) {
+        throw const ApiException(sessionExpiredMessage, statusCode: 401);
+      }
+      final newToken = await _tokens.accessToken;
+      response = await _execute(() => request(_authHeader(newToken)), timeout);
+    }
+    return _decode(response);
+  }
+
+  static Map<String, String> _authHeader(String? token) => token == null ? const {} : {'Authorization': 'Bearer $token'};
+
+  // Yenileme token'ıyla yeni token çifti alır, sunucu reddederse oturumu kapatır
+  Future<bool> _refreshTokens(Duration timeout) async {
+    final refreshToken = await _tokens.refreshToken;
+    if (refreshToken != null) {
+      final response = await _execute(
+        () => _http.post(uri(ApiConstants.refresh), headers: _jsonHeaders, body: jsonEncode({'refreshToken': refreshToken})),
+        timeout,
+      );
+      if (response.statusCode == 200) {
+        final decoded = _decode(response);
+        await _tokens.save(decoded['accessToken'].toString(), decoded['refreshToken'].toString());
+        return true;
+      }
+      if (response.statusCode != 401) _decode(response);
+    }
+    await _tokens.clear();
+    onSessionExpired?.call();
+    return false;
+  }
+
   // İsteği gönderir, bağlantı ve zaman aşımı hatalarını anlaşılır mesaja çevirir
-  Future<Map<String, dynamic>> _send(Future<http.Response> Function() request, Duration timeout) async {
-    final http.Response response;
+  Future<http.Response> _execute(Future<http.Response> Function() request, Duration timeout) async {
     try {
-      response = await request().timeout(timeout);
+      return await request().timeout(timeout);
     } on TimeoutException {
       throw const ApiException('Sunucu zamanında cevap vermedi, lütfen tekrar deneyin.');
     } on SocketException {
@@ -64,7 +112,6 @@ class ApiClient {
     } on http.ClientException {
       throw const ApiException('Sunucuya ulaşılamadı. Bağlantınızı kontrol edin.');
     }
-    return _decode(response);
   }
 
   // Cevabı JSON olarak çözer, başarısızsa sunucunun mesajıyla hata fırlatır

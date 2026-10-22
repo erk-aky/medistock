@@ -1,12 +1,17 @@
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants/api_constants.dart';
 import '../models/user_model.dart';
 import '../network/api_client.dart';
+import '../network/token_store.dart';
 
 class AuthService {
   final ApiClient _api;
+  final TokenStore _tokens;
 
-  AuthService({ApiClient? apiClient}) : _api = apiClient ?? ApiClient();
+  AuthService({ApiClient? apiClient, TokenStore? tokenStore})
+      : _api = apiClient ?? ApiClient(tokenStore: tokenStore),
+        _tokens = tokenStore ?? TokenStore.instance;
 
   /// ✅ YENİ: E-posta Doğrulama Kodunu Backend'e Gönderir
   /// POST /api/v1/auth/verify-email
@@ -20,12 +25,10 @@ class AuthService {
 
   /// ✅ Profil Bilgilerini Veritabanında Günceller
   Future<Map<String, dynamic>> updateProfile({
-    required int userId,
     required String newUsername,
     required String newEmail,
   }) async {
     final decoded = await _api.put(ApiConstants.updateProfile, {
-      'userId': userId,
       'newUsername': newUsername,
       'newEmail': newEmail,
     });
@@ -38,8 +41,8 @@ class AuthService {
   }
 
   /// ✅ Backend'den Güncel Profil Bilgilerini Çeker
-  Future<Map<String, dynamic>> getUserProfile(String username) async {
-    final decoded = await _api.get(ApiConstants.profile(username));
+  Future<Map<String, dynamic>> getUserProfile() async {
+    final decoded = await _api.get(ApiConstants.me);
 
     final prefs = await SharedPreferences.getInstance();
     if (decoded['email'] != null) await prefs.setString('email', decoded['email']);
@@ -55,9 +58,9 @@ class AuthService {
   Future<Map<String, dynamic>> login(String username, String password) async {
     final decoded = await _api.post(ApiConstants.login, {'usernameOrEmail': username, 'password': password});
 
-    final prefs = await SharedPreferences.getInstance();
+    await _tokens.save(decoded['accessToken'].toString(), decoded['refreshToken'].toString());
 
-    await prefs.setBool('isLoggedIn', true);
+    final prefs = await SharedPreferences.getInstance();
     await prefs.setString('username', decoded['username'] ?? username);
     await prefs.setString('email', decoded['email'] ?? '');
     if (decoded['id'] != null) await prefs.setInt('userId', decoded['id']);
@@ -65,12 +68,6 @@ class AuthService {
     await prefs.setString('subscriptionStatus', decoded['subscriptionStatus'] ?? 'None');
     if (decoded['trialEndDate'] != null) await prefs.setString('trialEndDate', decoded['trialEndDate']);
     if (decoded['subscriptionEndDate'] != null) await prefs.setString('subscriptionEndDate', decoded['subscriptionEndDate']);
-
-    final token = (decoded['token'] ?? decoded['authToken'])?.toString();
-    if (token != null) {
-      await prefs.setString('authToken', token);
-      await prefs.setString('token', token);
-    }
 
     return decoded;
   }
@@ -102,8 +99,25 @@ class AuthService {
     );
   }
 
+  // Telefonda geçerli bir oturum olup olmadığını döner
+  Future<bool> hasSession() => _tokens.hasSession();
+
+  // Sunucudaki oturumu kapatmayı dener, sonuç ne olursa olsun telefondaki oturumu siler
+  Future<void> logout() async {
+    final refreshToken = await _tokens.refreshToken;
+    if (refreshToken != null) {
+      try {
+        await _api.post(ApiConstants.logout, {'refreshToken': refreshToken}, timeout: const Duration(seconds: 10));
+      } on ApiException catch (e) {
+        debugPrint('Sunucudaki oturum kapatılamadı: $e');
+      }
+    }
+    await clearSession();
+  }
+
   /// Oturumu kapatır
   Future<void> clearSession() async {
+    await _tokens.clear();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('isLoggedIn');
     await prefs.remove('username');

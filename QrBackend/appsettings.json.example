@@ -14,6 +14,13 @@
     "NotifyEmail": "you@example.com",
     "HttpTimeoutSeconds": 120
   },
+  "Jwt": {
+    "Issuer": "QrBackend",
+    "Audience": "QrApp",
+    "SigningKey": "EN_AZ_32_KARAKTERLIK_UZUN_VE_RASTGELE_BIR_ANAHTAR",
+    "AccessTokenMinutes": 1440,
+    "RefreshTokenDays": 60
+  },
   "Its": {
     "CodesFilePath": ""
   },

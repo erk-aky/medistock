@@ -2,22 +2,19 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace QrBackend.Tests
 {
-    public class ApiResponseFormatTests : IClassFixture<WebApplicationFactory<Program>>
+    public class ApiResponseFormatTests : IClassFixture<TestApiFactory>
     {
-        private readonly WebApplicationFactory<Program> _factory;
+        private readonly TestApiFactory _factory;
 
-        public ApiResponseFormatTests(WebApplicationFactory<Program> factory)
+        public ApiResponseFormatTests(TestApiFactory factory)
         {
             _factory = factory;
         }
 
-        private HttpClient CreateClient(string environment) =>
-            _factory.WithWebHostBuilder(b => b.UseEnvironment(environment)).CreateClient();
+        private HttpClient CreateClient(string environment) => _factory.CreateClient(environment, authorized: true);
 
         private static async Task<JsonElement> ReadJsonAsync(HttpResponseMessage response)
         {

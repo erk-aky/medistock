@@ -48,7 +48,7 @@ class AuthViewModel extends ChangeNotifier {
 
   Future<void> loadSaved() async {
     final prefs = await SharedPreferences.getInstance();
-    _isLoggedIn = prefs.getBool(_keyLoggedIn) ?? false;
+    _isLoggedIn = await _authService.hasSession();
     userId = prefs.getInt(_keyUserId);
     _username = prefs.getString(_keyUsername);
     _email = prefs.getString(_keyEmail);
@@ -59,8 +59,8 @@ class AuthViewModel extends ChangeNotifier {
     notifyListeners(); 
     debugPrint("🔄 Veriler hafızadan yüklendi: ID: $userId, User: $_username");
     
-    if (_isLoggedIn && _username != null) {
-      await fetchAndUpdateProfile(_username!);
+    if (_isLoggedIn) {
+      await fetchAndUpdateProfile();
     }
   }
 
@@ -91,9 +91,9 @@ class AuthViewModel extends ChangeNotifier {
   }
 
   /// ✅ PROFİL ÇEKERKEN ID YAKALAMA
-  Future<void> fetchAndUpdateProfile(String username) async {
+  Future<void> fetchAndUpdateProfile() async {
     try {
-      final resp = await _authService.getUserProfile(username);
+      final resp = await _authService.getUserProfile();
 
       if (resp['success'] == true) {
         // backend'den gelen değerler
@@ -161,14 +161,12 @@ class AuthViewModel extends ChangeNotifier {
       final success = resp['success'] == true || resp['ok'] == true;
 
       if (success) {
-        final token = resp['token']?.toString();
         _trialEndDate = resp['trialEndDate']?.toString(); 
         
         // ID yakalama (Gelen loglara göre burayı revize edebiliriz)
         userId = resp['id'] ?? (resp['user'] != null ? resp['user']['id'] : null);
 
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool(_keyLoggedIn, true);
         await prefs.setString(_keyUsername, username);
         
         if (userId != null) {
@@ -189,10 +187,6 @@ class AuthViewModel extends ChangeNotifier {
 
         if (_trialEndDate != null) {
           await prefs.setString('trialEndDate', _trialEndDate!);
-        }
-
-        if (token != null) {
-          await prefs.setString(_keyToken, token);
         }
 
         _isLoggedIn = true;
@@ -224,22 +218,7 @@ class AuthViewModel extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
 
-      // 1️⃣ ID’yi garantiye al
-      userId ??= prefs.getInt(_keyUserId);
-
-      if (userId == null || userId == 0) {
-        debugPrint("❌ HATA: Kullanıcı ID hala bulunamadı! Prefs Key: $_keyUserId");
-        _error = "Kullanıcı kimliği bulunamadı. Lütfen tekrar giriş yapın.";
-        _isLoading = false;
-        notifyListeners();
-        return false;
-      }
-
-      debugPrint("🚀 Güncelleme isteği gönderiliyor: ID: $userId");
-
-      // 2️⃣ API isteği
       final resp = await _authService.updateProfile(
-        userId: userId!,
         newUsername: newUsername ?? _username ?? "",
         newEmail: newEmail ?? _email ?? "",
       );
@@ -324,7 +303,7 @@ class AuthViewModel extends ChangeNotifier {
     await prefs.remove('hasShownExpiredForever');
 
     try {
-      await _authService.clearSession();
+      await _authService.logout();
     } catch (e) {
       print('Logout Hatası: $e');
     }

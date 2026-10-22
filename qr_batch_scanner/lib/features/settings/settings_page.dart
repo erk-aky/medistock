@@ -70,7 +70,7 @@ class SettingsPage extends StatelessWidget {
               // 4️⃣ 🔥 EKLEME: Backend’den en güncel profili çek ve VM’i güncelle
               if (usernameToFetch != null && usernameToFetch.isNotEmpty) {
                 try {
-                  await authVm.fetchAndUpdateProfile(usernameToFetch);
+                  await authVm.fetchAndUpdateProfile();
                 } catch (e) {
                   print("❌ Profil Çekme Başarısız: $e");
                   // Hata alsa bile sayfayı aç

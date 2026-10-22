@@ -1,6 +1,10 @@
+using System.Text;
 using Asp.Versioning;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
 using QrBackend.Middleware;
 using QrBackend.Services; // Senin orijinal namespace'in
 using QrBackend.Models;   // Senin orijinal namespace'in
@@ -44,6 +48,34 @@ builder.Services.AddDataProtection().SetApplicationName("QrBackend");
 builder.Services.AddSingleton<RegistrationTicketService>();
 builder.Services.AddSingleton<EmailCooldown>();
 
+// --- OTURUM / TOKEN ---
+builder.Services.AddOptions<JwtOptions>()
+    .Bind(builder.Configuration.GetSection("Jwt"))
+    .Validate(o => Encoding.UTF8.GetByteCount(o.SigningKey) >= 32, "Jwt:SigningKey ayarı eksik veya 32 karakterden kısa. appsettings.json içine uzun ve rastgele bir anahtar yazın.")
+    .ValidateOnStart();
+
+builder.Services.AddScoped<IRefreshTokenStore>(provider =>
+{
+    var config = provider.GetRequiredService<IConfiguration>();
+    return new RefreshTokenRepository(config.GetConnectionString("Default") ?? "");
+});
+builder.Services.AddScoped<TokenService>();
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
+builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+    .Configure<IOptions<JwtOptions>>((options, jwt) =>
+    {
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidIssuer = jwt.Value.Issuer,
+            ValidAudience = jwt.Value.Audience,
+            IssuerSigningKey = TokenService.CreateSigningKey(jwt.Value),
+            ClockSkew = TimeSpan.FromMinutes(1)
+        };
+    });
+builder.Services.AddAuthorization();
+
 builder.Services.AddScoped<AuthService>(provider =>
 {
     var config = provider.GetRequiredService<IConfiguration>();
@@ -51,7 +83,8 @@ builder.Services.AddScoped<AuthService>(provider =>
     var emailService = provider.GetRequiredService<EmailService>();
     var ticketService = provider.GetRequiredService<RegistrationTicketService>();
     var emailCooldown = provider.GetRequiredService<EmailCooldown>();
-    return new AuthService(connString, emailService, ticketService, emailCooldown);
+    var tokenService = provider.GetRequiredService<TokenService>();
+    return new AuthService(connString, emailService, ticketService, emailCooldown, tokenService);
 });
 
 builder.Services.AddScoped<DrugRepository>(provider =>
@@ -84,6 +117,8 @@ var app = builder.Build();
 
 app.UseExceptionHandler();
 app.UseStatusCodePages(StatusCodeResponseWriter.WriteAsync);
+app.UseAuthentication();
+app.UseAuthorization();
 
 // --- ENDPOINTLER ---
 app.MapGet("/", () => Results.Ok(new { success = true, message = "Backend JSON Modunda Calisiyor" }));

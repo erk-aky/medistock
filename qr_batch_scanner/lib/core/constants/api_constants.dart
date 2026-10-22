@@ -11,13 +11,15 @@ class ApiConstants {
   static const String updateProfile = '$apiPrefix/auth/update-profile';
   static const String forgotPassword = '$apiPrefix/auth/forgot-password';
   static const String resetPassword = '$apiPrefix/auth/reset-password';
+  static const String refresh = '$apiPrefix/auth/refresh';
+  static const String logout = '$apiPrefix/auth/logout';
+  static const String me = '$apiPrefix/auth/me';
   static const String qrLookup = '$apiPrefix/qr/lookup';
   static const String dbVersion = '$apiPrefix/qr/db-version';
   static const String dbExport = '$apiPrefix/qr/db-export';
   static const String itsResolveCode = '$apiPrefix/its/resolve-code';
 
-  // Kullanıcı adını adrese güvenli şekilde ekleyerek profil adresini döner
-  static String profile(String username) => '$apiPrefix/auth/profile/${Uri.encodeComponent(username)}';
+  static const Set<String> publicPaths = {login, register, verifyEmail, forgotPassword, resetPassword, refresh, logout};
 }
 
 class ExternalUrls {

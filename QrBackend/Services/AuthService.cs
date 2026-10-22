@@ -13,14 +13,16 @@ namespace QrBackend.Services
         private readonly RegistrationTicketService _ticketService;
         private readonly EmailCooldown _emailCooldown;
         private readonly TokenService _tokenService;
+        private readonly EmailChangeTicketService _emailChangeTickets;
 
-        public AuthService(string connectionString, EmailService emailService, RegistrationTicketService ticketService, EmailCooldown emailCooldown, TokenService tokenService)
+        public AuthService(string connectionString, EmailService emailService, RegistrationTicketService ticketService, EmailCooldown emailCooldown, TokenService tokenService, EmailChangeTicketService emailChangeTickets)
         {
             _connectionString = connectionString;
             _emailService = emailService;
             _ticketService = ticketService;
             _emailCooldown = emailCooldown;
             _tokenService = tokenService;
+            _emailChangeTickets = emailChangeTickets;
         }
 
         // Token'dan gelen id ile kullanıcıyı bulur, yoksa null döner
@@ -194,59 +196,144 @@ namespace QrBackend.Services
             return null;
         }
 
-        // Token sahibinin kullanıcı adı ve e-postasını günceller
+        // Token sahibinin kullanıcı adını günceller, e-posta ayrı ve doğrulamalı akışla değişir
         public async Task<(bool Success, string Message)> UpdateUserProfile(int userId, UpdateProfileRequest request)
         {
             var username = InputRules.NormalizeUsername(request.NewUsername);
-            var email = InputRules.NormalizeEmail(request.NewEmail);
 
-            var inputError = InputRules.ValidateUsername(username) ?? InputRules.ValidateEmail(email);
+            var inputError = InputRules.ValidateUsername(username);
             if (inputError != null) return (false, inputError);
 
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync();
 
-            const string checkSql = @"
-                SELECT 
-                    COUNT(*) FILTER (WHERE LOWER(email) = LOWER(@email) AND id != @id) as email_exists,
-                    COUNT(*) FILTER (WHERE LOWER(username) = LOWER(@username) AND id != @id) as user_exists
-                FROM app_user";
+            const string checkSql = "SELECT COUNT(*) FROM app_user WHERE LOWER(username) = LOWER(@username) AND id != @id";
 
             await using (var cmd = new NpgsqlCommand(checkSql, conn))
             {
-                cmd.Parameters.AddWithValue("@email", email);
                 cmd.Parameters.AddWithValue("@username", username);
                 cmd.Parameters.AddWithValue("@id", userId);
 
-                await using var reader = await cmd.ExecuteReaderAsync();
-                if (await reader.ReadAsync())
-                {
-                    bool emailExists = reader.GetInt64(0) > 0;
-                    bool userExists = reader.GetInt64(1) > 0;
-
-                    if (emailExists) return (false, "Bu e-posta adresi zaten başka bir kullanıcı tarafından kullanılıyor.");
-                    if (userExists) return (false, "Bu kullanıcı adı zaten alınmış.");
-                }
+                if ((long)(await cmd.ExecuteScalarAsync() ?? 0L) > 0)
+                    return (false, "Bu kullanıcı adı zaten alınmış.");
             }
 
-            const string updateSql = @"
-                UPDATE app_user 
-                SET username = @username, email = @email 
-                WHERE id = @id";
+            const string updateSql = "UPDATE app_user SET username = @username WHERE id = @id";
 
             await using (var updateCmd = new NpgsqlCommand(updateSql, conn))
             {
                 updateCmd.Parameters.AddWithValue("@username", username);
-                updateCmd.Parameters.AddWithValue("@email", email);
                 updateCmd.Parameters.AddWithValue("@id", userId);
 
                 int affectedRows = await updateCmd.ExecuteNonQueryAsync();
-                
+
                 if (affectedRows == 0)
                     return (false, "Kullanıcı bulunamadı veya güncellenemedi.");
             }
 
             return (true, "Profil başarıyla güncellendi.");
+        }
+
+        // Yeni e-posta adresine onay kodu gönderir ve onay için gereken bileti döner
+        public async Task<(bool Success, string Message, string? Ticket)> RequestEmailChangeAsync(int userId, string rawEmail)
+        {
+            var email = InputRules.NormalizeEmail(rawEmail);
+            var emailError = InputRules.ValidateEmail(email);
+            if (emailError != null) return (false, emailError, null);
+
+            var user = await GetUserByIdAsync(userId);
+            if (user == null) return (false, "Kullanıcı bulunamadı.", null);
+            if (string.Equals(user.Email, email, StringComparison.OrdinalIgnoreCase))
+                return (false, "Yeni e-posta adresi mevcut adresinizle aynı.", null);
+
+            await using (var conn = new NpgsqlConnection(_connectionString))
+            {
+                await conn.OpenAsync();
+                if (await IsEmailTakenByOtherAsync(conn, email, userId))
+                    return (false, "Bu e-posta adresi zaten kullanımda.", null);
+            }
+
+            if (!_emailCooldown.TryAcquire(email, DateTimeOffset.UtcNow, out var remaining))
+                return (false, $"Yeni kod için lütfen {remaining} saniye bekleyin.", null);
+
+            string code = RegistrationTicketService.GenerateCode();
+            try
+            {
+                await _emailService.SendEmailChangeCodeAsync(email, code);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"E-posta Değişikliği Mail Hatası: {ex.Message}");
+                _emailCooldown.Release(email);
+                return (false, "Onay kodu gönderilemedi, lütfen e-posta adresinizi kontrol edip tekrar deneyin.", null);
+            }
+
+            return (true, "Onay kodu yeni e-posta adresinize gönderildi.", _emailChangeTickets.Create(userId, user.Email, email, code, DateTimeOffset.UtcNow));
+        }
+
+        // Bilet ve kod doğruysa ve adres bilet alındığından beri değişmediyse e-postayı değiştirir, eski adrese bilgilendirme maili atar
+        public async Task<(bool Success, string Message)> ConfirmEmailChangeAsync(int userId, string ticket, string code)
+        {
+            var status = _emailChangeTickets.Read(ticket, DateTimeOffset.UtcNow, out var data);
+            if (status == TicketStatus.Expired)
+                return (false, "Kodun süresi doldu, lütfen yeni kod isteyin.");
+            if (status == TicketStatus.Invalid || data == null || data.UserId != userId)
+                return (false, "Geçersiz istek, lütfen e-posta değişikliğini yeniden başlatın.");
+            if (data.Code != code)
+                return (false, "Doğrulama kodu hatalı.");
+
+            var user = await GetUserByIdAsync(userId);
+            if (user == null) return (false, "Kullanıcı bulunamadı.");
+            if (!string.Equals(user.Email, data.OldEmail, StringComparison.OrdinalIgnoreCase))
+                return (false, "Geçersiz istek, lütfen e-posta değişikliğini yeniden başlatın.");
+
+            await using (var conn = new NpgsqlConnection(_connectionString))
+            {
+                await conn.OpenAsync();
+
+                const string updateSql = @"
+                    UPDATE app_user SET email = @email
+                    WHERE id = @id AND NOT EXISTS (SELECT 1 FROM app_user WHERE LOWER(email) = LOWER(@email) AND id != @id)";
+
+                await using var cmd = new NpgsqlCommand(updateSql, conn);
+                cmd.Parameters.AddWithValue("@email", data.NewEmail);
+                cmd.Parameters.AddWithValue("@id", userId);
+
+                try
+                {
+                    if (await cmd.ExecuteNonQueryAsync() == 0)
+                        return (false, "Bu e-posta adresi zaten kullanımda.");
+                }
+                catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
+                {
+                    return (false, "Bu e-posta adresi zaten kullanımda.");
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(user.Email))
+            {
+                try
+                {
+                    await _emailService.SendEmailChangedNoticeAsync(user.Email, data.NewEmail);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"E-posta Değişikliği Bilgilendirme Hatası: {ex.Message}");
+                }
+            }
+
+            return (true, "E-posta adresiniz başarıyla değiştirildi.");
+        }
+
+        // E-posta başka bir kullanıcıda kayıtlıysa true döner
+        private static async Task<bool> IsEmailTakenByOtherAsync(NpgsqlConnection conn, string email, int userId)
+        {
+            const string sql = "SELECT COUNT(*) FROM app_user WHERE LOWER(email) = LOWER(@email) AND id != @id";
+
+            await using var cmd = new NpgsqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@email", email);
+            cmd.Parameters.AddWithValue("@id", userId);
+            return (long)(await cmd.ExecuteScalarAsync() ?? 0L) > 0;
         }
 
         public async Task<(bool Success, string Message)> GenerateForgotPasswordCodeAsync(string rawEmail)

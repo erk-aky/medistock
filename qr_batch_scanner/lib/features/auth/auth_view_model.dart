@@ -40,6 +40,7 @@ class AuthViewModel extends ChangeNotifier {
   String? get trialEndDate => _trialEndDate;
 
   String? _registrationTicket;
+  String? _emailChangeTicket;
 
   static const _keyLoggedIn = 'isLoggedIn';
   static const _keyUsername = 'username';
@@ -209,38 +210,25 @@ class AuthViewModel extends ChangeNotifier {
     }
   }
 
-  /// ✅ GERÇEK DB GÜNCELLEMESİ (Hatasız ve Senkronize)
-  Future<bool> updateUserInfo({String? newUsername, String? newEmail}) async {
+  // Kullanıcı adını sunucuda günceller, başarılıysa telefondaki kaydı da yeniler
+  Future<bool> updateUsername(String newUsername) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
 
     try {
       final prefs = await SharedPreferences.getInstance();
+      final resp = await _authService.updateProfile(newUsername: newUsername);
 
-      final resp = await _authService.updateProfile(
-        newUsername: newUsername ?? _username ?? "",
-        newEmail: newEmail ?? _email ?? "",
-      );
+      if (resp['success'] == true) {
+        _username = newUsername;
+        await prefs.setString(_keyUsername, newUsername);
 
-      if (resp['success'] == true || resp['ok'] == true) {
-        final updatedUsername = resp['username']?.toString() ?? newUsername ?? _username ?? "";
-        final updatedEmail = resp['email']?.toString() ?? newEmail ?? _email ?? "";
-
-        _username = updatedUsername;
-        _email = updatedEmail;
-
-        // prefs güncelle
-        await prefs.setString(_keyUsername, updatedUsername);
-        await prefs.setString(_keyEmail, updatedEmail);
-
-        // burada userId'nin prefs veya memory'de olduğundan emin ol
         userId ??= prefs.getInt(_keyUserId);
         if (userId != null) {
-          await prefs.setString('local_username_$userId', updatedUsername); // <<< EKLENDİ
+          await prefs.setString('local_username_$userId', newUsername);
         }
 
-        debugPrint("✅ Güncelleme başarılı (STATE + PREFS): $_username");
         _isLoading = false;
         notifyListeners();
         return true;
@@ -252,6 +240,52 @@ class AuthViewModel extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint("⚠️ Güncelleme sırasında hata oluştu: $e");
+      _error = e.toString().replaceAll("Exception:", "");
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  // Yeni adrese onay kodu gönderilmesini ister, tekrar gönderimde de aynı şekilde çağrılır
+  Future<bool> requestEmailChange(String newEmail) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final resp = await _authService.requestEmailChange(newEmail);
+      _emailChangeTicket = resp['ticket']?.toString();
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _error = e.toString().replaceAll("Exception:", "");
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  // Kod doğruysa e-posta değişikliğini tamamlar ve yeni adresi telefona kaydeder
+  Future<bool> confirmEmailChange(String newEmail, String code) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      await _authService.confirmEmailChange(_emailChangeTicket ?? '', code);
+      _emailChangeTicket = null;
+      _email = newEmail.trim().toLowerCase();
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_keyEmail, _email!);
+      await prefs.setString('email', _email!);
+
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
       _error = e.toString().replaceAll("Exception:", "");
       _isLoading = false;
       notifyListeners();

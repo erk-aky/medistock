@@ -54,6 +54,44 @@ namespace QrBackend.Services
             await SendAsync(email);
         }
 
+        // E-posta değişikliği için onay kodunu yeni adrese gönderir
+        public async Task SendEmailChangeCodeAsync(string toEmail, string code)
+        {
+            var email = new MimeMessage();
+            email.From.Add(new MailboxAddress(_smtp.FromName, _smtp.FromAddress));
+            email.To.Add(MailboxAddress.Parse(toEmail));
+            email.Subject = "E-posta Değişikliği Onay Kodu";
+
+            email.Body = new TextPart(MimeKit.Text.TextFormat.Html)
+            {
+                Text = $@"<h3>E-posta adresinizi değiştirmek için onay kodunuz:</h3>
+                          <h1 style='color:green; letter-spacing: 5px;'>{code}</h1>
+                          <p>Bu kod 15 dakika geçerlidir.</p>
+                          <br>
+                          <p>Eğer bu değişikliği siz istemediyseniz bu maili dikkate almayınız.</p>"
+            };
+
+            await SendAsync(email);
+        }
+
+        // E-posta değiştirilince eski adrese bilgilendirme maili gönderir
+        public async Task SendEmailChangedNoticeAsync(string toEmail, string newEmail)
+        {
+            var email = new MimeMessage();
+            email.From.Add(new MailboxAddress(_smtp.FromName, _smtp.FromAddress));
+            email.To.Add(MailboxAddress.Parse(toEmail));
+            email.Subject = "E-posta Adresiniz Değiştirildi";
+
+            email.Body = new TextPart(MimeKit.Text.TextFormat.Html)
+            {
+                Text = $@"<h3>Hesabınızın e-posta adresi değiştirildi</h3>
+                          <p>Hesabınız artık <b>{System.Net.WebUtility.HtmlEncode(newEmail)}</b> adresine bağlı.</p>
+                          <p>Bu değişikliği siz yapmadıysanız lütfen bizimle iletişime geçin.</p>"
+            };
+
+            await SendAsync(email);
+        }
+
         public async Task SendTitckSyncSuccessEmailAsync(string toEmail, string sourceUrl, int rowCount, List<TitckDrugRow> added, int updated, TimeSpan duration)
         {
             var email = new MimeMessage();

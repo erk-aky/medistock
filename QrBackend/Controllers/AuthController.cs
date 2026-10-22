@@ -111,6 +111,28 @@ namespace QrBackend.Controllers
             return Ok(new { success = true, message = result.Message });
         }
 
+        // Yeni e-posta adresine onay kodu gönderir
+        [HttpPost("change-email/request")]
+        public async Task<IActionResult> RequestEmailChange([FromBody] ChangeEmailRequest request)
+        {
+            var result = await _authService.RequestEmailChangeAsync(CurrentUserId, request.NewEmail);
+            if (!result.Success)
+                return BadRequest(new { success = false, message = result.Message });
+
+            return Ok(new { success = true, message = result.Message, ticket = result.Ticket });
+        }
+
+        // Kod doğruysa e-posta adresini değiştirir
+        [HttpPost("change-email/confirm")]
+        public async Task<IActionResult> ConfirmEmailChange([FromBody] VerifyEmailRequest request)
+        {
+            var result = await _authService.ConfirmEmailChangeAsync(CurrentUserId, request.Ticket, request.Code);
+            if (!result.Success)
+                return BadRequest(new { success = false, message = result.Message });
+
+            return Ok(new { success = true, message = result.Message });
+        }
+
         [AllowAnonymous]
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] RegisterRequest request)
@@ -157,6 +179,11 @@ namespace QrBackend.Controllers
     public class RefreshTokenRequest
     {
         public string RefreshToken { get; set; } = string.Empty;
+    }
+
+    public class ChangeEmailRequest
+    {
+        public string NewEmail { get; set; } = string.Empty;
     }
 
     public class VerifyEmailRequest

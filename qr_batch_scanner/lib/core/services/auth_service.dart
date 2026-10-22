@@ -23,21 +23,24 @@ class AuthService {
     );
   }
 
-  /// ✅ Profil Bilgilerini Veritabanında Günceller
-  Future<Map<String, dynamic>> updateProfile({
-    required String newUsername,
-    required String newEmail,
-  }) async {
-    final decoded = await _api.put(ApiConstants.updateProfile, {
-      'newUsername': newUsername,
-      'newEmail': newEmail,
-    });
+  // Kullanıcı adını sunucuda günceller
+  Future<Map<String, dynamic>> updateProfile({required String newUsername}) async {
+    final decoded = await _api.put(ApiConstants.updateProfile, {'newUsername': newUsername});
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('username', newUsername);
-    await prefs.setString('email', newEmail);
 
     return decoded;
+  }
+
+  // Yeni e-posta adresine onay kodu gönderilmesini ister
+  Future<Map<String, dynamic>> requestEmailChange(String newEmail) async {
+    return _api.post(ApiConstants.changeEmailRequest, {'newEmail': newEmail}, timeout: const Duration(seconds: 15));
+  }
+
+  // Onay koduyla e-posta değişikliğini tamamlar
+  Future<Map<String, dynamic>> confirmEmailChange(String ticket, String code) async {
+    return _api.post(ApiConstants.changeEmailConfirm, {'ticket': ticket, 'code': code}, timeout: const Duration(seconds: 15));
   }
 
   /// ✅ Backend'den Güncel Profil Bilgilerini Çeker

@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/constants/validation_constants.dart';
 import '../qr_scan/qr_scan_view_model.dart';
 import '../auth/auth_view_model.dart';
+import 'email_verification_page.dart';
 
 class AccountDetailsPage extends StatefulWidget {
   final QrScanViewModel vm;
@@ -94,8 +95,8 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
 
     if (!mounted) return;
     setState(() {
-      _usernameController.text = savedUsername?.isNotEmpty == true ? savedUsername! : (authVm.username ?? "");
-      _emailController.text = savedEmail?.isNotEmpty == true ? savedEmail! : (authVm.email ?? "");
+      _usernameController.text = authVm.username?.isNotEmpty == true ? authVm.username! : (savedUsername ?? "");
+      _emailController.text = authVm.email?.isNotEmpty == true ? authVm.email! : (savedEmail ?? "");
       _glnController.text = prefs.getString(userGlnKey) ?? "";
       _itsPasswordController.text = prefs.getString(userItsKey) ?? "";
       _pharmacyNameController.text = "Güneş Eczanesi (Örnek)";
@@ -132,34 +133,42 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
     });
 
     try {
-      // 1. Önce SharedPreferences'a kaydet ve 'await' ile bittiğinden emin ol
       await prefs.setString('local_gln_$userIdStr', _glnController.text);
       await prefs.setString('local_its_password_$userIdStr', _itsPasswordController.text);
 
-      print("✅ Yerel veriler kaydedildi: ${_usernameController.text}");
+      final newUsername = _usernameController.text;
+      final newEmail = _emailController.text.toLowerCase();
 
-      // 2. DB Güncelleme İsteği
-      final success = await authVm.updateUserInfo(
-        newUsername: _usernameController.text,
-        newEmail: _emailController.text,
-      );
-
-      if (success && mounted) {
-        await prefs.setString('local_username_$userIdStr', _usernameController.text);
-        await prefs.setString('local_email_$userIdStr', _emailController.text);
-
-        // 3. ViewModel içindeki username'i manuel güncelle (404 hatasını önlemek için)
-        // Eğer AuthViewModel içinde set metodu yoksa authVm.fetchAndUpdateProfile doğrudan çağrılır
-        
-        print("🚀 İstek atılıyor: ${_usernameController.text}");
-        
-        // Backend'den güncel veriyi çek
-        await authVm.fetchAndUpdateProfile();
-        
-        _showSnackBar("Tüm bilgileriniz başarıyla güncellendi!", Colors.green);
-      } else if (mounted && authVm.error != null) {
-        _showSnackBar(authVm.error!, Colors.redAccent);
+      if (newUsername != (authVm.username ?? "")) {
+        if (!await authVm.updateUsername(newUsername)) {
+          if (mounted) _showSnackBar(authVm.error ?? "Kullanıcı adı güncellenemedi.", Colors.redAccent);
+          return;
+        }
+        await prefs.setString('local_username_$userIdStr', newUsername);
       }
+
+      if (newEmail != (authVm.email ?? "").toLowerCase()) {
+        if (!await authVm.requestEmailChange(newEmail)) {
+          _emailController.text = authVm.email ?? "";
+          if (mounted) _showSnackBar(authVm.error ?? "Onay kodu gönderilemedi.", Colors.redAccent);
+          return;
+        }
+        if (!mounted) return;
+
+        final verified = await Navigator.push<bool>(
+          context,
+          MaterialPageRoute(builder: (_) => EmailVerificationPage(newEmail: newEmail)),
+        );
+        if (verified != true) {
+          _emailController.text = authVm.email ?? "";
+          if (mounted) _showSnackBar("E-posta doğrulanmadığı için eski adresiniz geçerli.", Colors.orange);
+          return;
+        }
+        await prefs.setString('local_email_$userIdStr', newEmail);
+      }
+
+      await authVm.fetchAndUpdateProfile();
+      if (mounted) _showSnackBar("Tüm bilgileriniz başarıyla güncellendi!", Colors.green);
     } catch (e) {
       print("❌ HATA: $e");
       _showSnackBar("İşlem sırasında bir hata oluştu.", Colors.redAccent);

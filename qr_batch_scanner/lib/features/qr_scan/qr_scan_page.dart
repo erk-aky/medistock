@@ -2,12 +2,12 @@ import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mobile_scanner/mobile_scanner.dart'; 
 import 'qr_scan_view_model.dart';
 import 'qr_type_stats_page.dart'; 
 import '../../core/gs1/gs1_parser.dart';
 import '../../core/models/qr_lookup_result.dart';
+import '../../core/services/its_credential_store.dart';
 import 'package:flutter/services.dart';
 import '../../core/subscription/subscription_page.dart';
 import 'stock_comparison_page.dart';
@@ -880,8 +880,7 @@ class _QrScanViewState extends State<_QrScanView> {
   }
 
   Future<void> _handleItsCheck(BuildContext context, QrScanViewModel vm) async {
-    // 1️⃣ SharedPreferences ve AuthViewModel hazır olana kadar bekle
-    final prefs = await SharedPreferences.getInstance();
+    // 1️⃣ AuthViewModel hazır olana kadar bekle
     final authVm = Provider.of<AuthViewModel>(context, listen: false);
 
     // Eğer userId henüz null ise küçük bir gecikme ile tekrar dene
@@ -895,8 +894,9 @@ class _QrScanViewState extends State<_QrScanView> {
     final userIdStr = userId?.toString() ?? "guest";
 
     // 3️⃣ SharedPreferences’ten doğru key ile verileri alıyoruz
-    String gln = prefs.getString('local_gln_$userIdStr') ?? "";
-    String pass = prefs.getString('local_its_password_$userIdStr') ?? "";
+    final credentials = await ItsCredentialStore.instance.read(userIdStr);
+    String gln = credentials.gln;
+    String pass = credentials.password;
 
     debugPrint("🔍 [ITS-CHECK] Kontrol ediliyor - ID: $userIdStr, GLN: $gln, Pass: ${pass.isNotEmpty ? '******' : ''}");
 

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/constants/validation_constants.dart';
+import '../../core/services/its_credential_store.dart';
 import '../qr_scan/qr_scan_view_model.dart';
 import '../auth/auth_view_model.dart';
 import 'email_verification_page.dart';
@@ -87,18 +88,17 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
 
     final userNameKey = 'local_username_$userIdStr';
     final userEmailKey = 'local_email_$userIdStr';
-    final userGlnKey = 'local_gln_$userIdStr';
-    final userItsKey = 'local_its_password_$userIdStr';
 
     final savedUsername = prefs.getString(userNameKey);
     final savedEmail = prefs.getString(userEmailKey);
+    final itsCredentials = await ItsCredentialStore.instance.read(userIdStr);
 
     if (!mounted) return;
     setState(() {
       _usernameController.text = authVm.username?.isNotEmpty == true ? authVm.username! : (savedUsername ?? "");
       _emailController.text = authVm.email?.isNotEmpty == true ? authVm.email! : (savedEmail ?? "");
-      _glnController.text = prefs.getString(userGlnKey) ?? "";
-      _itsPasswordController.text = prefs.getString(userItsKey) ?? "";
+      _glnController.text = itsCredentials.gln;
+      _itsPasswordController.text = itsCredentials.password;
       _pharmacyNameController.text = "Güneş Eczanesi (Örnek)";
     });
 
@@ -133,8 +133,7 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
     });
 
     try {
-      await prefs.setString('local_gln_$userIdStr', _glnController.text);
-      await prefs.setString('local_its_password_$userIdStr', _itsPasswordController.text);
+      await ItsCredentialStore.instance.save(userIdStr, gln: _glnController.text, password: _itsPasswordController.text);
 
       final newUsername = _usernameController.text;
       final newEmail = _emailController.text.toLowerCase();

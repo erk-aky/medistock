@@ -17,6 +17,7 @@ import 'package:share_plus/share_plus.dart';
 import '../../core/gs1/gs1_parser.dart';
 import '../../core/models/qr_lookup_result.dart';
 import '../../core/network/api_client.dart';
+import '../../core/services/its_credential_store.dart';
 import '../../core/services/qr_service.dart';
 import '../../core/services/qr_mlkit_service.dart';
 import '../../core/services/local_db_service.dart'; 
@@ -606,16 +607,12 @@ class QrScanViewModel extends ChangeNotifier {
     required String lot,
     required String skt,
   }) async {
-    final prefs = await SharedPreferences.getInstance();
-
     final authVm = Provider.of<AuthViewModel>(context, listen: false);
     final userIdStr = authVm.userId?.toString() ?? "guest";
 
-    final glnKey = 'local_gln_$userIdStr';
-    final passKey = 'local_its_password_$userIdStr';
-
-    final String gln = prefs.getString(glnKey)?.trim() ?? "";
-    final String pass = prefs.getString(passKey)?.trim() ?? "";
+    final credentials = await ItsCredentialStore.instance.read(userIdStr);
+    final String gln = credentials.gln.trim();
+    final String pass = credentials.password.trim();
 
     try {
       print("🔑 [ADIM 1] İTS Token İsteniyor...");

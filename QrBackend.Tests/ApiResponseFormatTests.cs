@@ -98,37 +98,6 @@ namespace QrBackend.Tests
         }
 
         [Fact]
-        public async Task QrLookupFormsuzIstek_400VeOrtakBicim()
-        {
-            var response = await CreateClient("Production").PostAsync("/api/v1/qr/lookup", Json("{}"));
-            var json = await ReadJsonAsync(response);
-            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-            Assert.False(json.GetProperty("success").GetBoolean());
-            Assert.Equal("Fotoğraf form verisi olarak gönderilmelidir.", json.GetProperty("message").GetString());
-        }
-
-        [Fact]
-        public async Task QrLookupFotografsizForm_400VeOrtakBicim()
-        {
-            var form = new MultipartFormDataContent { { new StringContent("x"), "baska" } };
-            var response = await CreateClient("Production").PostAsync("/api/v1/qr/lookup", form);
-            var json = await ReadJsonAsync(response);
-            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-            Assert.Equal("Fotoğraf bulunamadı.", json.GetProperty("message").GetString());
-        }
-
-        [Fact]
-        public async Task QrLookupCppKapali_503VeOrtakBicim()
-        {
-            var form = new MultipartFormDataContent { { new ByteArrayContent(new byte[] { 1, 2, 3 }), "image", "foto.jpg" } };
-            var response = await CreateClient("Production").PostAsync("/api/v1/qr/lookup", form);
-            var json = await ReadJsonAsync(response);
-            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-            Assert.False(json.GetProperty("success").GetBoolean());
-            Assert.Equal("Karekod okuma servisi şu an çalışmıyor, lütfen daha sonra tekrar deneyin.", json.GetProperty("message").GetString());
-        }
-
-        [Fact]
         public async Task OnayHataliBilet_400VeOrtakBicim()
         {
             var response = await CreateClient("Production").PostAsJsonAsync("/api/v1/auth/verify-email", new { ticket = "uydurma", code = "123456" });

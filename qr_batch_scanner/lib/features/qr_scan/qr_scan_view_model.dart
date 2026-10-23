@@ -1,10 +1,8 @@
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mobile_scanner/mobile_scanner.dart'; 
-import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart' as mlkit;
 import 'package:flutter/services.dart';
 import 'dart:async';
 import 'package:excel/excel.dart';
@@ -18,7 +16,6 @@ import '../../core/gs1/gs1_parser.dart';
 import '../../core/models/qr_lookup_result.dart';
 import '../../core/network/api_client.dart';
 import '../../core/services/its_credential_store.dart';
-import '../../core/services/qr_service.dart';
 import '../../core/services/qr_mlkit_service.dart';
 import '../../core/services/local_db_service.dart';
 import '../../core/services/scan_history_repository.dart';
@@ -29,19 +26,11 @@ import 'package:provider/provider.dart';
 import '../../core/constants/api_constants.dart'; // Dosya yolun AuthService ile aynıysa bu şekilde olmalı
 
 class QrScanViewModel extends ChangeNotifier {
-  final ImagePicker _picker = ImagePicker();
-  final QrService _qrService = QrService();
   final ApiClient _apiClient = ApiClient();
   final QrMlkitService _mlkit_service = QrMlkitService();
   final LocalDbService _localDbService = LocalDbService();
 
   Function(String msg)? onScanError;
-
-  File? _lastScannedFile;
-  File? get lastScannedFile => _lastScannedFile;
-
-  List<QrLookupResult> _lastResults = [];
-  List<QrLookupResult> get lastResults => _lastResults;
 
   List<Barcode> _detectedBarcodes = [];
   List<Barcode> get detectedBarcodes => _detectedBarcodes;
@@ -500,41 +489,6 @@ class QrScanViewModel extends ChangeNotifier {
     await _persistHistory((userId) => _historyRepository.clear(userId));
   }
 
-  Future<void> openCameraAndScan({bool allowGalleryFallback = true}) async {
-    _error = null;
-    final Stopwatch totalStopwatch = Stopwatch()..start();
-    try {
-      _isProcessing = true;
-      _lastScannedFile = null;
-      _lastResults = [];
-      notifyListeners();
-
-      XFile? file = await _picker.pickImage(source: ImageSource.camera, imageQuality: 80, maxWidth: 2000, maxHeight: 2000);
-      if (file == null && allowGalleryFallback) {
-        file = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 80, maxWidth: 2000, maxHeight: 2000);
-      }
-
-      if (file == null) { _isProcessing = false; notifyListeners(); return; }
-
-      final imageFile = File(file.path);
-      _lastScannedFile = imageFile;
-      
-      if (_offlineMode) {
-        await _handleOfflineScan(imageFile);
-      } else {
-        await _handleOnlineScan(imageFile, totalStopwatch);
-      }
-
-      if (_error != null && onScanError != null) onScanError!(_error!);
-    } catch (e) {
-      _error = 'Hata: $e';
-      if (onScanError != null) onScanError!(_error!);
-    } finally {
-      _isProcessing = false;
-      notifyListeners();
-    }
-  }
-
   // 1. Kullanıcının dış IP adresini öğrenmek için yardımcı fonksiyon
   Future<String> getPublicIP() async {
     try {
@@ -960,65 +914,6 @@ class QrScanViewModel extends ChangeNotifier {
   void setShouldShowReport(bool value) {
     showReportAfterCamera = value;
     notifyListeners();
-  }
-
-  Future<void> _handleOnlineScan(File imageFile, Stopwatch totalStopwatch) async {
-    try {
-      _error = null;
-      _lastResults = [];
-      notifyListeners(); 
-      final response = await _qrService.uploadQrImage(imageFile);
-      _lastResults = response.results;
-
-      if (_lastResults.isEmpty) {
-        _error = "Fotoğrafta barkod bulunamadı."; 
-        HapticFeedback.vibrate(); 
-      } else {
-        _error = null;
-        HapticFeedback.lightImpact(); 
-        final nowEntries = response.results.map((e) => QrLookupResultWithCount(qr: e, createdAt: DateTime.now().toUtc(), isOffline: false)).toList();
-        await _appendToHistory(nowEntries);
-      }
-    } catch (e) {
-      await _handleOfflineScan(imageFile);
-    } finally {
-      notifyListeners();
-    }
-  }
-
-  Future<void> _handleOfflineScan(File imageFile) async {
-    try {
-      _error = null;
-      _lastResults = [];
-      notifyListeners();
-
-      final mlkit.BarcodeScanner barcodeScanner = mlkit.BarcodeScanner(formats: [mlkit.BarcodeFormat.dataMatrix, mlkit.BarcodeFormat.qrCode]);
-      final mlkit.InputImage inputImage = mlkit.InputImage.fromFile(imageFile);
-      final List<mlkit.Barcode> barcodes = await barcodeScanner.processImage(inputImage);
-      
-      if (barcodes.isEmpty) {
-        _error = "Fotoğrafta barkod bulunamadı.";
-        HapticFeedback.vibrate(); 
-      } else {
-        _error = null;
-        final newResults = <QrLookupResultWithCount>[];
-        final List<QrLookupResult> tempLastResults = [];
-
-        for (final barcode in barcodes) {
-          final qr = await _valueToQrResult(barcode.rawValue ?? "", barcode.boundingBox);
-          tempLastResults.add(qr);
-          newResults.add(QrLookupResultWithCount(qr: qr, createdAt: DateTime.now().toUtc(), isOffline: true));
-        }
-
-        _lastResults = List.from(tempLastResults);
-        await _appendToHistory(newResults);
-      }
-      await barcodeScanner.close();
-    } catch (e) {
-      _error = 'Hata: $e';
-    } finally {
-      notifyListeners();
-    }
   }
 
   Future<QrLookupResult> _valueToQrResult(String v, Rect rect) async {

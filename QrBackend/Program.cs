@@ -96,7 +96,6 @@ builder.Services.AddScoped<DrugRepository>(provider =>
     var config = provider.GetRequiredService<IConfiguration>();
     return new DrugRepository(config.GetConnectionString("Default") ?? "");
 });
-builder.Services.AddScoped<QrLookupService>();
 
 // --- TİTCK HAFTALIK SENKRON ---
 builder.Services.Configure<TitckSyncOptions>(builder.Configuration.GetSection("TitckSync"));

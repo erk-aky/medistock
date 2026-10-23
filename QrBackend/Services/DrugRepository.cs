@@ -13,20 +13,6 @@ namespace QrBackend.Services
             _connectionString = connectionString;
         }
 
-        // Barkoda göre ilaç adını bulur, yoksa null döner
-        public async Task<string?> FindProductNameAsync(string gtin)
-        {
-            await using var conn = new NpgsqlConnection(_connectionString);
-            await conn.OpenAsync();
-
-            const string query = "SELECT urun_adi FROM qrcodes WHERE barkod = @gtin LIMIT 1";
-            await using var cmd = new NpgsqlCommand(query, conn);
-            cmd.Parameters.AddWithValue("gtin", gtin);
-
-            var result = await cmd.ExecuteScalarAsync();
-            return result?.ToString();
-        }
-
         // Son başarılı TİTCK senkronunun numarasını ve zamanını döner, hiç yoksa 0 döner
         public async Task<(long Version, DateTimeOffset? UpdatedAt)> GetLatestVersionAsync()
         {

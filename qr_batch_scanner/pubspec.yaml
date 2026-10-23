@@ -32,8 +32,6 @@ dependencies:
     sdk: flutter
   # State management
   provider: ^6.0.5
-  # Camera/photo picking (opens native camera UI)
-  image_picker: ^1.2.1
   # ML Kit barcode scanning (QR)
   shared_preferences: ^2.1.1
   google_mlkit_barcode_scanning: ^0.14.1

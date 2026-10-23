@@ -43,7 +43,6 @@ namespace QrBackend.Tests
         [Theory]
         [InlineData("GET", "/api/v1/qr/db-version")]
         [InlineData("GET", "/api/v1/qr/db-export")]
-        [InlineData("POST", "/api/v1/qr/lookup")]
         [InlineData("POST", "/api/v1/its/resolve-code")]
         [InlineData("GET", "/api/v1/auth/me")]
         [InlineData("PUT", "/api/v1/auth/update-profile")]

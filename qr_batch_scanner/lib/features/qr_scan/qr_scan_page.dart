@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -347,13 +346,6 @@ class _QrScanViewState extends State<_QrScanView> {
       });
     }
     _lastCount = currentCount;
-  }
-
-  Future<ui.Image> _getImageInfo(File file) async {
-    final bytes = await file.readAsBytes();
-    final ui.Codec codec = await ui.instantiateImageCodec(bytes);
-    final ui.FrameInfo frameInfo = await codec.getNextFrame();
-    return frameInfo.image;
   }
 
  @override
@@ -1422,8 +1414,7 @@ class _QrScanViewState extends State<_QrScanView> {
         borderRadius: BorderRadius.circular(24),
         child: vm.isProcessing
             ? const Center(child: CircularProgressIndicator())
-            : vm.lastScannedFile == null
-                ? InkWell(
+            : InkWell(
                     onTap: () => _openLiveScanner(),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -1432,53 +1423,6 @@ class _QrScanViewState extends State<_QrScanView> {
                         const SizedBox(height: 12),
                         const Text('Yeni İlaç Tara', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: const Color(0xFFE53935))),
                         const Text('Kamerayı açmak için dokunun', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                      ],
-                    ),
-                  )
-                : InkWell(
-                    onTap: () => _openLiveScanner(),
-                    child: Stack(
-                      children: [
-                        Positioned.fill(
-                          child: Image.file(vm.lastScannedFile!, fit: BoxFit.contain),
-                        ),
-                        Container(color: Colors.black.withOpacity(0.05)),
-                        if (vm.lastResults.isNotEmpty)
-                          FutureBuilder<ui.Image>(
-                            future: _getImageInfo(vm.lastScannedFile!),
-                            builder: (context, snapshot) {
-                              if (!snapshot.hasData) return const SizedBox();
-                              return LayoutBuilder(
-                                builder: (context, constraints) => CustomPaint(
-                                  size: Size(constraints.maxWidth, constraints.maxHeight),
-                                  painter: QrBoxPainter(
-                                    results: vm.lastResults,
-                                    imageActualSize: Size(snapshot.data!.width.toDouble(), snapshot.data!.height.toDouble()),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        Positioned(
-                          bottom: 0, left: 0, right: 0,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 6),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.5),
-                            ),
-                            child: const Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.touch_app_rounded, color: Colors.white, size: 14),
-                                SizedBox(width: 6),
-                                Text(
-                                  'Yeniden taramak için dokunun',
-                                  style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w500),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
                       ],
                     ),
                   ),
@@ -2082,54 +2026,3 @@ class LiveBarcodePainter extends CustomPainter {
   @override
   bool shouldRepaint(LiveBarcodePainter oldDelegate) => true;
 }
-
-class QrBoxPainter extends CustomPainter {
-  final List<QrLookupResult> results;
-  final Size imageActualSize;
-
-  QrBoxPainter({required this.results, required this.imageActualSize});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (imageActualSize.width == 0 || imageActualSize.height == 0) return;
-
-    double scale = size.width / imageActualSize.width;
-    if (imageActualSize.height * scale > size.height) {
-      scale = size.height / imageActualSize.height;
-    }
-
-    final double renderedWidth = imageActualSize.width * scale;
-    final double renderedHeight = imageActualSize.height * scale;
-    final double offsetX = (size.width - renderedWidth) / 2;
-    final double offsetY = (size.height - renderedHeight) / 2;
-
-    for (var res in results) {
-      if (res.x == 0 && res.y == 0 && res.w == 0) continue;
-
-      final paint = Paint()
-        ..color = res.found ? Colors.teal.withOpacity(0.3) : Colors.red.withOpacity(0.3)
-        ..style = PaintingStyle.fill;
-
-      final borderPaint = Paint()
-        ..color = res.found ? Colors.teal : Colors.red
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0;
-
-      final rect = Rect.fromLTWH(
-        offsetX + (res.x * scale),
-        offsetY + (res.y * scale),
-        res.w * scale,
-        res.h * scale,
-      );
-
-      canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(4)), paint);
-      canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(4)), borderPaint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant QrBoxPainter oldDelegate) => true;
-}
-
-
-

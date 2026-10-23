@@ -1,21 +1,5 @@
 import 'package:flutter/material.dart';
 
-class QrLookupResponse {
-  final String? imageBase64; 
-  final List<QrLookupResult> results;
-
-  QrLookupResponse({this.imageBase64, required this.results});
-
-  factory QrLookupResponse.fromJson(Map<String, dynamic> json) {
-    return QrLookupResponse(
-      imageBase64: json['image'] as String?, 
-      results: (json['results'] as List? ?? [])
-          .map((i) => QrLookupResult.fromJson(i as Map<String, dynamic>))
-          .toList(),
-    );
-  }
-}
-
 class QrLookupResult {
   final String value; 
   final bool found;   

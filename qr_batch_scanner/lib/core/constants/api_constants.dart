@@ -16,7 +16,6 @@ class ApiConstants {
   static const String me = '$apiPrefix/auth/me';
   static const String changeEmailRequest = '$apiPrefix/auth/change-email/request';
   static const String changeEmailConfirm = '$apiPrefix/auth/change-email/confirm';
-  static const String qrLookup = '$apiPrefix/qr/lookup';
   static const String dbVersion = '$apiPrefix/qr/db-version';
   static const String dbExport = '$apiPrefix/qr/db-export';
   static const String itsResolveCode = '$apiPrefix/its/resolve-code';

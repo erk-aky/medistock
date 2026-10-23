@@ -6,38 +6,11 @@ namespace QrBackend.Controllers
 {
     public class QrController : ApiControllerBase
     {
-        private readonly QrLookupService _lookupService;
         private readonly DrugRepository _drugRepository;
 
-        public QrController(QrLookupService lookupService, DrugRepository drugRepository)
+        public QrController(DrugRepository drugRepository)
         {
-            _lookupService = lookupService;
             _drugRepository = drugRepository;
-        }
-
-        // Fotoğraftaki karekodları okuyup ilaç bilgileriyle birlikte döner
-        [HttpPost("lookup")]
-        public async Task<IActionResult> Lookup()
-        {
-            var stepSw = System.Diagnostics.Stopwatch.StartNew();
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss.fff}] >>> [1] İSTEK ALINDI");
-
-            if (!Request.HasFormContentType) return BadRequest(ApiResponses.Error("Fotoğraf form verisi olarak gönderilmelidir."));
-
-            var form = await Request.ReadFormAsync();
-            var file = form.Files["image"];
-            if (file == null || file.Length == 0) return BadRequest(ApiResponses.Error("Fotoğraf bulunamadı."));
-
-            using var msInput = new MemoryStream();
-            await file.CopyToAsync(msInput);
-            byte[] imageBytes = msInput.ToArray();
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [2] RAM'E ALMA: {stepSw.ElapsedMilliseconds}ms");
-
-            var outcome = await _lookupService.LookupAsync(imageBytes);
-            if (outcome.DecoderUnavailable)
-                return StatusCode(StatusCodes.Status503ServiceUnavailable, ApiResponses.Error("Karekod okuma servisi şu an çalışmıyor, lütfen daha sonra tekrar deneyin."));
-
-            return Ok(new { success = true, results = outcome.Results });
         }
 
         // Telefondaki offline veritabanının güncel olup olmadığını anlamak için son liste sürümünü döner

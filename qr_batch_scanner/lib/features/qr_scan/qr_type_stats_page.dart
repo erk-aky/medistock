@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
-import 'qr_scan_view_model.dart'; // ViewModel'e erişim için
+import '../../core/models/qr_lookup_result.dart';
 
 class QrTypeStatsPage extends StatelessWidget {
   final List<QrLookupResultWithCount> history;

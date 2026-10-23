@@ -20,59 +20,13 @@ import '../../core/network/api_client.dart';
 import '../../core/services/its_credential_store.dart';
 import '../../core/services/qr_service.dart';
 import '../../core/services/qr_mlkit_service.dart';
-import '../../core/services/local_db_service.dart'; 
+import '../../core/services/local_db_service.dart';
+import '../../core/services/scan_history_repository.dart';
 // Abonelik özelliği aktif edileceği zaman kullanılacak
 // import '../../core/subscription/subscription_page.dart';
 import '../auth/auth_view_model.dart';
 import 'package:provider/provider.dart';
 import '../../core/constants/api_constants.dart'; // Dosya yolun AuthService ile aynıysa bu şekilde olmalı
-
-class QrLookupResultWithCount {
-  final QrLookupResult qr;
-  final DateTime createdAt;
-  int count;
-  bool isOffline;
-
-  QrLookupResultWithCount({
-    required this.qr,
-    DateTime? createdAt,
-    this.count = 1,
-    this.isOffline = false,
-  }) : createdAt = createdAt ?? DateTime.now().toUtc(); // Varsayılan UTC yapıldı
-
-  Map<String, dynamic> toJson() {
-    return {
-      'qr': qr.toJson(),
-      'count': count,
-      'isOffline': isOffline,
-      'createdAt': createdAt.toIso8601String(),
-    };
-  }
-
-  factory QrLookupResultWithCount.fromJson(Map<String, dynamic> json) {
-    final qrMap = json['qr'] as Map<String, dynamic>? ?? {};
-    final qr = QrLookupResult.fromJson(qrMap);
-
-    DateTime parsedCreatedAt;
-    try {
-      final raw = json['createdAt'];
-      if (raw is String && raw.isNotEmpty) {
-        parsedCreatedAt = DateTime.parse(raw).toUtc(); // UTC'ye zorla
-      } else {
-        parsedCreatedAt = DateTime.fromMillisecondsSinceEpoch(0).toUtc();
-      }
-    } catch (_) {
-      parsedCreatedAt = DateTime.fromMillisecondsSinceEpoch(0).toUtc();
-    }
-
-    return QrLookupResultWithCount(
-      qr: qr,
-      createdAt: parsedCreatedAt,
-      count: (json['count'] ?? 1) as int,
-      isOffline: (json['isOffline'] ?? false) as bool,
-    );
-  }
-}
 
 class QrScanViewModel extends ChangeNotifier {
   final ImagePicker _picker = ImagePicker();
@@ -193,6 +147,8 @@ class QrScanViewModel extends ChangeNotifier {
   bool get isProcessing => _isProcessing;
 
   final List<QrLookupResultWithCount> _history = [];
+  final ScanHistoryRepository _historyRepository = ScanHistoryRepository.instance;
+  int? _historyUserId;
 
   DateTime? _startDate;
   DateTime? _endDate;
@@ -225,7 +181,6 @@ class QrScanViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  static const String _prefsKey = 'qr_lookup_results';
   static const String _stockTargetKey = 'stock_target';
   static const String _stockSessionKey = 'stock_session';
 
@@ -233,14 +188,6 @@ class QrScanViewModel extends ChangeNotifier {
 
   QrScanViewModel() {
     loadSavedResults();
-  }
-
-  Future<String> _prefsKeyForCurrentUser(SharedPreferences prefs) async {
-    final username = prefs.getString('username');
-    if (username != null && username.isNotEmpty) {
-      return 'qr_lookup_results_$username';
-    }
-    return _prefsKey;
   }
 
   Future<void> loadSavedResults() async {
@@ -273,16 +220,14 @@ class QrScanViewModel extends ChangeNotifier {
     }
     
     // 2. TARAMA GEÇMİŞİNİ YÜKLE
-    final key = await _prefsKeyForCurrentUser(prefs);
-    final String? savedHistory = prefs.getString(key);
-    
-    if (savedHistory != null) {
+    _historyUserId = prefs.getInt('userId');
+    _history.clear();
+    if (_historyUserId != null) {
       try {
-        final List<dynamic> decoded = jsonDecode(savedHistory);
-        _history.clear();
-        _history.addAll(
-          decoded.map((item) => QrLookupResultWithCount.fromJson(item)).toList()
-        );
+        _history.addAll(await _historyRepository.load(
+          _historyUserId!,
+          legacyUsername: prefs.getString('username'),
+        ));
         debugPrint("✅ Hafızadan ${_history.length} adet kayıt yüklendi.");
       } catch (e) {
         debugPrint("❌ Geçmiş veriler yüklenirken hata oluştu: $e");
@@ -340,11 +285,15 @@ class QrScanViewModel extends ChangeNotifier {
   }
   */
 
-  Future<void> _saveResults() async {
-    final prefs = await SharedPreferences.getInstance();
-    final key = await _prefsKeyForCurrentUser(prefs);
-    final jsonList = _history.map((r) => r.toJson()).toList();
-    await prefs.setString(key, jsonEncode(jsonList));
+  // Geçmişteki değişikliği veritabanına yazar, hata olursa ekrandaki listeyi bozmadan loga yazar
+  Future<void> _persistHistory(Future<void> Function(int userId) write) async {
+    final userId = _historyUserId;
+    if (userId == null) return;
+    try {
+      await write(userId);
+    } catch (e) {
+      debugPrint("❌ Geçmiş kaydedilemedi: $e");
+    }
   }
 
   final Map<String, (Barcode, DateTime)> _activeBarcodesMap = {};
@@ -442,11 +391,6 @@ class QrScanViewModel extends ChangeNotifier {
           _normalScanSession[val] = (_normalScanSession[val] ?? 0) + 1;
         }
       }
-
-      // Sadece normal modda geçmişi kalıcı hafızaya kaydet
-      if (!isComparisonMode) {
-        await _saveResults();
-      }
     } catch (e) {
       debugPrint("❌ Arka Plan Hatası: $e");
     } finally {
@@ -528,7 +472,7 @@ class QrScanViewModel extends ChangeNotifier {
 
   Future<void> _processSingleBarcode(String value) async {
     final qr = await _valueToQrResult(value, Rect.zero);
-    _appendToHistory([QrLookupResultWithCount(qr: qr, createdAt: DateTime.now().toUtc(), isOffline: _offlineMode)]);
+    await _appendToHistory([QrLookupResultWithCount(qr: qr, createdAt: DateTime.now().toUtc(), isOffline: _offlineMode)]);
   }
 
   void clearCurrentSession() {
@@ -548,15 +492,9 @@ class QrScanViewModel extends ChangeNotifier {
 
   // Tüm listeyi temizler
   void clearAllHistory() async {
-    // 1. Önce RAM'deki listeyi temizle
     _history.clear();
-
-    // 2. Senin bulduğun fonksiyonu çağırarak boş listeyi SharedPreferences'a yaz
-    // Bu sayede uygulama açılıp kapandığında liste boş kalacak.
-    await _saveResults();
-
-    // 3. UI'ı bilgilendir ki ekran hemen boşalsın
     notifyListeners();
+    await _persistHistory((userId) => _historyRepository.clear(userId));
   }
 
   Future<void> openCameraAndScan({bool allowGalleryFallback = true}) async {
@@ -1019,8 +957,7 @@ class QrScanViewModel extends ChangeNotifier {
         _error = null;
         HapticFeedback.lightImpact(); 
         final nowEntries = response.results.map((e) => QrLookupResultWithCount(qr: e, createdAt: DateTime.now().toUtc(), isOffline: false)).toList();
-        _appendToHistory(nowEntries);
-        await _saveResults();
+        await _appendToHistory(nowEntries);
       }
     } catch (e) {
       await _handleOfflineScan(imageFile);
@@ -1054,8 +991,7 @@ class QrScanViewModel extends ChangeNotifier {
         }
 
         _lastResults = List.from(tempLastResults);
-        _appendToHistory(newResults);
-        await _saveResults();
+        await _appendToHistory(newResults);
       }
       await barcodeScanner.close();
     } catch (e) {
@@ -1101,9 +1037,11 @@ class QrScanViewModel extends ChangeNotifier {
     return Gs1Parser.parse(raw).gtin ?? raw;
   }
 
-  void _appendToHistory(List<QrLookupResultWithCount> entries) {
+  // Yeni kayıtları ekrandaki listeye ekler ve veritabanına yazar
+  Future<void> _appendToHistory(List<QrLookupResultWithCount> entries) async {
     _history.addAll(entries);
     notifyListeners();
+    await _persistHistory((userId) => _historyRepository.insertAll(userId, entries));
   }
 
   List<QrLookupResultWithCount> aggregate(List<QrLookupResultWithCount> items) {
@@ -1134,9 +1072,9 @@ class QrScanViewModel extends ChangeNotifier {
     return filtered;
   }
 
-  void removeQrResultByValue(String value) { _history.removeWhere((h) => h.qr.value == value); notifyListeners(); _saveResults(); }
-  void removeHistoryItem(QrLookupResultWithCount item) { _history.remove(item); notifyListeners(); _saveResults(); }
-  void removeByProductName(String productName) { _history.removeWhere((h) => h.qr.data?.productName == productName); notifyListeners(); _saveResults(); }
+  void removeQrResultByValue(String value) { _history.removeWhere((h) => h.qr.value == value); notifyListeners(); _persistHistory((userId) => _historyRepository.deleteByValue(userId, value)); }
+  void removeHistoryItem(QrLookupResultWithCount item) { _history.remove(item); notifyListeners(); _deleteEntry(item); }
+  void removeByProductName(String productName) { _history.removeWhere((h) => h.qr.data?.productName == productName); notifyListeners(); _persistHistory((userId) => _historyRepository.deleteByProductName(userId, productName)); }
 
   void incrementQrCountByValue(String value) {
     if (_history.isEmpty) return;
@@ -1144,13 +1082,19 @@ class QrScanViewModel extends ChangeNotifier {
     for (final h in _history.reversed) { if (h.qr.value == value) { rep = h; break; } }
     if (rep == null) return;
     _appendToHistory([QrLookupResultWithCount(qr: rep.qr, createdAt: DateTime.now().toUtc(), count: 1)]);
-    _saveResults();
   }
 
   void decrementQrCountByValue(String value) {
     for (int i = _history.length - 1; i >= 0; i--) {
-      if (_history[i].qr.value == value) { _history.removeAt(i); notifyListeners(); _saveResults(); return; }
+      if (_history[i].qr.value == value) { _deleteEntry(_history.removeAt(i)); notifyListeners(); return; }
     }
+  }
+
+  // Tek kaydı veritabanından siler, id'si henüz yoksa yazılmamış demektir
+  void _deleteEntry(QrLookupResultWithCount entry) {
+    final id = entry.id;
+    if (id == null) return;
+    _persistHistory((_) => _historyRepository.deleteById(id));
   }
 
   Map<String, int> get typeSummary {

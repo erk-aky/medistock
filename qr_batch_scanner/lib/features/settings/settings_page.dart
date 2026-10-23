@@ -324,6 +324,7 @@ class SettingsPage extends StatelessWidget {
       
       // ViewModel üzerinden temizliği yap
       await authVm.logout();
+      if (!context.mounted) return;
 
       // Login sayfasına yönlendir ve tüm stack'i temizle
       Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);

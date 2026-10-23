@@ -397,6 +397,7 @@ class _QrScanViewState extends State<_QrScanView> {
     await SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
     ]);
+    if (!mounted) return null;
 
     // Yeni bir tarama oturumu başlat (Eski çizimleri temizle)
     _vm.clearCurrentSession();
@@ -470,9 +471,10 @@ class _QrScanViewState extends State<_QrScanView> {
                               );
                               if (context.mounted) {
                                 await scannerController.stop();
-                                Navigator.pop(context, true); 
-                                if (ucKodu != null) {
-                                  showItsDialog(context, _vm, ucKodu, "00000", gtin ?? "", sn ?? "");
+                                if (!context.mounted) return;
+                                Navigator.pop(context, true);
+                                if (ucKodu != null && mounted) {
+                                  showItsDialog(this.context, _vm, ucKodu, "00000", gtin ?? "", sn ?? "");
                                 }
                               }
                             }

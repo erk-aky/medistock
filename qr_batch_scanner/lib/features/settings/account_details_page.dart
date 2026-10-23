@@ -82,8 +82,8 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
   }
 
   Future<void> _loadInitialData() async {
-    final prefs = await SharedPreferences.getInstance();
     final authVm = Provider.of<AuthViewModel>(context, listen: false);
+    final prefs = await SharedPreferences.getInstance();
     String userIdStr = authVm.userId?.toString() ?? "guest";
 
     final userNameKey = 'local_username_$userIdStr';
@@ -122,8 +122,8 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
     }
 
     FocusScope.of(context).unfocus();
-    final prefs = await SharedPreferences.getInstance();
     final authVm = Provider.of<AuthViewModel>(context, listen: false);
+    final prefs = await SharedPreferences.getInstance();
 
     final userIdStr = authVm.userId?.toString() ?? "guest";
     

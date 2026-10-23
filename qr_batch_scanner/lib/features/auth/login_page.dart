@@ -184,9 +184,8 @@ class _LoginViewState extends State<_LoginView> {
                                   }
 
                                   // --- 3. QrScanViewModel’i tazeleyelim ---
-                                  if (context.mounted) {
-                                    context.read<QrScanViewModel>().loadSavedResults();
-                                  }
+                                  if (!context.mounted) return;
+                                  context.read<QrScanViewModel>().loadSavedResults();
 
                                   Navigator.of(context).pushReplacement(
                                     MaterialPageRoute(builder: (_) => const DbSyncPage()),

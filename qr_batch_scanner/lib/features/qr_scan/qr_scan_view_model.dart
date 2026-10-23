@@ -306,12 +306,14 @@ class QrScanViewModel extends ChangeNotifier {
       } catch (_) {}
     }
 
-    // Timer'ı başlat ve UI'ı güncelle
-    startSubscriptionTimer();
+    // Abonelik özelliği aktif edileceği zaman kullanılacak
+    // startSubscriptionTimer();
     notifyListeners();
   }
-  
 
+
+  // Abonelik özelliği aktif edileceği zaman kullanılacak
+  /*
   void startSubscriptionTimer() {
     _subscriptionTimer?.cancel(); 
     
@@ -336,6 +338,7 @@ class QrScanViewModel extends ChangeNotifier {
       }
     });
   }
+  */
 
   Future<void> _saveResults() async {
     final prefs = await SharedPreferences.getInstance();

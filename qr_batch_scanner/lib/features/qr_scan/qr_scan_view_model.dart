@@ -235,15 +235,18 @@ class QrScanViewModel extends ChangeNotifier {
     }
 
     // 3. STOK SAYIM OTURUMUNU YÜKLE
-    final username = prefs.getString('username') ?? 'guest';
-    final stockTarget = prefs.getString('${_stockTargetKey}_$username');
+    final stockUser = _stockUserSuffix(prefs);
+    await _migrateLegacyStockKeys(prefs, stockUser);
+    _targetInventory = {};
+    _currentScanSession = {};
+    final stockTarget = prefs.getString('${_stockTargetKey}_$stockUser');
     if (stockTarget != null) {
       try {
         final Map<String, dynamic> decoded = jsonDecode(stockTarget);
         _targetInventory = decoded.map((k, v) => MapEntry(k, (v as num).toInt()));
       } catch (_) {}
     }
-    final stockSession = prefs.getString('${_stockSessionKey}_$username');
+    final stockSession = prefs.getString('${_stockSessionKey}_$stockUser');
     if (stockSession != null) {
       try {
         final Map<String, dynamic> decoded = jsonDecode(stockSession);
@@ -742,11 +745,28 @@ class QrScanViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  // Stok sayımı anahtarlarının sonuna eklenecek kullanıcı id'sini döner
+  String _stockUserSuffix(SharedPreferences prefs) => prefs.getInt('userId')?.toString() ?? 'guest';
+
+  // Kullanıcı adına bağlı eski stok sayımı kayıtlarını kullanıcı id'sine taşır
+  Future<void> _migrateLegacyStockKeys(SharedPreferences prefs, String stockUser) async {
+    final username = prefs.getString('username');
+    if (stockUser == 'guest' || username == null || username.isEmpty || username == stockUser) return;
+    for (final baseKey in [_stockTargetKey, _stockSessionKey]) {
+      final legacy = prefs.getString('${baseKey}_$username');
+      if (legacy == null) continue;
+      if (!prefs.containsKey('${baseKey}_$stockUser')) {
+        await prefs.setString('${baseKey}_$stockUser', legacy);
+      }
+      await prefs.remove('${baseKey}_$username');
+    }
+  }
+
   Future<void> _saveStockSession() async {
     final prefs = await SharedPreferences.getInstance();
-    final username = prefs.getString('username') ?? 'guest';
-    await prefs.setString('${_stockTargetKey}_$username', jsonEncode(_targetInventory));
-    await prefs.setString('${_stockSessionKey}_$username', jsonEncode(_currentScanSession));
+    final stockUser = _stockUserSuffix(prefs);
+    await prefs.setString('${_stockTargetKey}_$stockUser', jsonEncode(_targetInventory));
+    await prefs.setString('${_stockSessionKey}_$stockUser', jsonEncode(_currentScanSession));
   }
 
   Future<void> clearStockSession() async {
@@ -755,9 +775,9 @@ class QrScanViewModel extends ChangeNotifier {
     _isComparisonMode = false;
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
-    final username = prefs.getString('username') ?? 'guest';
-    await prefs.remove('${_stockTargetKey}_$username');
-    await prefs.remove('${_stockSessionKey}_$username');
+    final stockUser = _stockUserSuffix(prefs);
+    await prefs.remove('${_stockTargetKey}_$stockUser');
+    await prefs.remove('${_stockSessionKey}_$stockUser');
   }
 
   Future<Map<String, dynamic>> getComparisonResults() async {

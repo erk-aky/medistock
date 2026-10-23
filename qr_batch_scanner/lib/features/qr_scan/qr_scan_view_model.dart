@@ -21,7 +21,8 @@ import '../../core/services/its_credential_store.dart';
 import '../../core/services/qr_service.dart';
 import '../../core/services/qr_mlkit_service.dart';
 import '../../core/services/local_db_service.dart'; 
-import '../../core/subscription/subscription_page.dart';
+// Abonelik özelliği aktif edileceği zaman kullanılacak
+// import '../../core/subscription/subscription_page.dart';
 import '../auth/auth_view_model.dart';
 import 'package:provider/provider.dart';
 import '../../core/constants/api_constants.dart'; // Dosya yolun AuthService ile aynıysa bu şekilde olmalı
@@ -139,6 +140,8 @@ class QrScanViewModel extends ChangeNotifier {
 
   bool showReportAfterCamera = false;
 
+  // Abonelik özelliği aktif edileceği zaman kullanılacak
+  /*
   bool get canExport {
     final now = DateTime.now().toUtc();
     
@@ -155,6 +158,7 @@ class QrScanViewModel extends ChangeNotifier {
     // Diğer tüm durumlarda (süre bittiyse veya tarihler yoksa) engelle
     return false;
   }
+  */
 
   String get remainingTrialTime {
     if (_subscriptionStatus != "Trialing" || _trialEndDate == null) return "";
@@ -652,7 +656,7 @@ class QrScanViewModel extends ChangeNotifier {
             'Authorization': 'Bearer $accessToken',
           },
           body: jsonEncode(requestBody),
-        );
+        ).timeout(const Duration(seconds: 30));
 
         if (response.statusCode == 200) {
           final resData = jsonDecode(response.body);
@@ -1286,6 +1290,8 @@ class QrScanViewModel extends ChangeNotifier {
     }
   }
 
+  // Abonelik özelliği aktif edileceği zaman kullanılacak
+  /*
   void _showSubscriptionDialog(BuildContext context) {
     const Color primaryColor = Color(0xFFB71C1C);
     const Color healthTeal = Color(0xFF00ADB5);
@@ -1422,6 +1428,7 @@ class QrScanViewModel extends ChangeNotifier {
       ),
     );
   }
+  */
 
   @override
   void dispose() {

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // ✅ 1. EKLEME: Ekran kilitleme için gerekli
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -16,14 +16,7 @@ import 'features/db_sync/db_sync_page.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ✅ 2. EKLEME: Uygulamayı sadece DİKEY (Portrait) modda çalışacak şekilde kilitliyoruz.
-  // Bu satır sayesinde telefon yan çevrilse bile kamera ve UI bozulmaz.
-  await SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.landscapeLeft,   // Sola Yatık
-    DeviceOrientation.landscapeRight,
-    DeviceOrientation.portraitDown,
-  ]);
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
   runApp(
     MultiProvider(
@@ -34,7 +27,7 @@ void main() async {
         ),
         // 2. QR ve Sayaç İşlemleri İçin
         ChangeNotifierProvider(
-          create: (_) => QrScanViewModel()..loadSavedResults(), 
+          create: (_) => QrScanViewModel(),
         ),
       ],
       child: const MyApp(),

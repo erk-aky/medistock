@@ -7,6 +7,7 @@ import 'qr_type_stats_page.dart';
 import '../../core/gs1/gs1_parser.dart';
 import '../../core/models/qr_lookup_result.dart';
 import '../../core/services/its_credential_store.dart';
+import '../../core/services/its_status_service.dart';
 import 'package:flutter/services.dart';
 import '../../core/subscription/subscription_page.dart';
 import 'stock_comparison_page.dart';
@@ -454,8 +455,9 @@ class _QrScanViewState extends State<_QrScanView> {
                               final sn = parsed.serialNo;
                               final lot = parsed.batchNo;
                               final skt = parsed.expiryDate;
-                              final String? ucKodu = await _vm.checkDrugStatusWithIts(
-                                context: context,
+                              final userId = Provider.of<AuthViewModel>(context, listen: false).userId?.toString() ?? "guest";
+                              final String? ucKodu = await ItsStatusService.instance.checkDrugStatus(
+                                userId: userId,
                                 gtin: gtin ?? "",
                                 sn: sn ?? "",
                                 lot: lot ?? "",
@@ -1018,7 +1020,7 @@ class _QrScanViewState extends State<_QrScanView> {
                           border: Border.all(color: Colors.blueGrey.withOpacity(0.1)),
                         ),
                         child: FutureBuilder<String>(
-                          future: vm.getPublicIP(),
+                          future: ItsStatusService.instance.getPublicIP(),
                           builder: (context, snapshot) {
                             return Row(
                               mainAxisAlignment: MainAxisAlignment.center,
@@ -1138,7 +1140,16 @@ class _QrScanViewState extends State<_QrScanView> {
               InkWell(
                 onTap: () async {
                   // 1. Önce dosyayı seçiyoruz (Panel hala açık kalsın ki context kopmasın)
-                  final loadedData = await vm.pickExcelFile(context); 
+                  Map<String, int>? loadedData;
+                  try {
+                    loadedData = await vm.pickExcelFile();
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text("Hata: $e"), backgroundColor: Colors.red),
+                      );
+                    }
+                  }
 
                   // 2. Dosya seçme işlemi (iptal veya seçim) bittikten sonra alt paneli kapat
                   if (context.mounted) {
@@ -1360,7 +1371,7 @@ class _QrScanViewState extends State<_QrScanView> {
                 subtitle: const Text("Taranan tüm ilaçları içeren Excel dosyası"),
                 onTap: () {
                   Navigator.pop(context);
-                  vm.exportFoundToExcel(context, type: 'all');
+                  _exportFound(vm, 'all');
                 },
               ),
               ListTile(
@@ -1369,7 +1380,7 @@ class _QrScanViewState extends State<_QrScanView> {
                 subtitle: const Text("Miadı yaklaşan (90 gün) ilaçları içeren Excel dosyası"),
                 onTap: () {
                   Navigator.pop(context);
-                  vm.exportFoundToExcel(context, type: 'return');
+                  _exportFound(vm, 'return');
                 },
               ),
               ListTile(
@@ -1378,7 +1389,7 @@ class _QrScanViewState extends State<_QrScanView> {
                 subtitle: const Text("Sadece miadı geçmiş ürünleri içeren Excel dosyası"),
                 onTap: () {
                   Navigator.pop(context);
-                  vm.exportFoundToExcel(context, type: 'expired');
+                  _exportFound(vm, 'expired');
                 },
               ),
               const SizedBox(height: 20),
@@ -1387,6 +1398,22 @@ class _QrScanViewState extends State<_QrScanView> {
         );
       },
     );
+  }
+
+  // Seçilen türdeki kayıtları Excel olarak paylaşır, kayıt yoksa ya da hata olursa mesaj gösterir
+  Future<void> _exportFound(QrScanViewModel vm, String type) async {
+    try {
+      final exported = await vm.exportFoundToExcel(type: type);
+      if (!exported && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(type == 'expired' ? "Miadı geçmiş ürün bulunamadı." : "Dışa aktarılacak kayıt bulunamadı."))
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Hata: $e")));
+      }
+    }
   }
 
   Widget _buildActionIcon({required IconData icon, required VoidCallback onPressed, Color color = Colors.white}) {

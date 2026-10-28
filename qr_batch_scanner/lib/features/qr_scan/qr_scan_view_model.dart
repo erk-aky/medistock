@@ -197,6 +197,9 @@ class QrScanViewModel extends ChangeNotifier {
     _targetInventory = stock.target;
     _currentScanSession = stock.scanned;
 
+    // 4. SKT UYARI AYINI YÜKLE
+    _expiryMonthLimit = prefs.getInt('expiry_month_limit') ?? 6;
+
     // Abonelik özelliği aktif edileceği zaman kullanılacak
     // startSubscriptionTimer();
     notifyListeners();
@@ -815,6 +818,7 @@ class QrScanViewModel extends ChangeNotifier {
 
   @override
   void dispose() {
+    _uiRefreshTimer?.cancel();
     _subscriptionTimer?.cancel(); 
     super.dispose();
   }

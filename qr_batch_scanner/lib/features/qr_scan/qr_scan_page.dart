@@ -193,12 +193,6 @@ class _QrScanViewState extends State<_QrScanView> {
       --------------------------------------------------------- */
 
       // --- DİĞER DİNLEYİCİLERİN (Aktif Kalmalı) ---
-      _vm.onScanError = (msg) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-        }
-      };
-      
       _lastCount = _vm.history.length;
       _vm.addListener(_onVmChange);
       

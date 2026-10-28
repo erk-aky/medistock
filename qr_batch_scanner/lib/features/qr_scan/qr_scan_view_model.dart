@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mobile_scanner/mobile_scanner.dart'; 
@@ -7,22 +6,18 @@ import 'dart:async';
 
 import '../../core/gs1/gs1_parser.dart';
 import '../../core/models/qr_lookup_result.dart';
-import '../../core/services/qr_mlkit_service.dart';
 import '../../core/services/excel_service.dart';
 import '../../core/services/local_db_service.dart';
 import '../../core/services/scan_history_repository.dart';
+import '../../core/services/stock_session_store.dart';
 // Abonelik özelliği aktif edileceği zaman kullanılacak
 // import '../../core/subscription/subscription_page.dart';
 
 class QrScanViewModel extends ChangeNotifier {
-  final QrMlkitService _mlkit_service = QrMlkitService();
   final LocalDbService _localDbService = LocalDbService();
-
-  Function(String msg)? onScanError;
 
   List<Barcode> _detectedBarcodes = [];
   List<Barcode> get detectedBarcodes => _detectedBarcodes;
-  Timer? _clearTimer;
 
   Size? _lastImageSize;
   Size? get lastImageSize => _lastImageSize;
@@ -40,13 +35,9 @@ class QrScanViewModel extends ChangeNotifier {
   // Karşılaştırmalı sayım için hedef stok verileri
   Map<String, int> _targetInventory = {};
   Map<String, int> get targetInventory => _targetInventory;
-  
-  bool _isCompareMode = false;
-  bool get isCompareMode => _isCompareMode;
 
   // O anki sayımda hangi barkoddan kaç tane okunduğunu tutar (stok modu)
   Map<String, int> _currentScanSession = {};
-  Map<String, int> get currentScanSession => _currentScanSession;
 
   int _sessionScanCount = 0;
   int get sessionScanCount => _sessionScanCount;
@@ -57,19 +48,14 @@ class QrScanViewModel extends ChangeNotifier {
 
   // Normal mod: kamera açılmadan önce tarananlar (önceki)
   Map<String, int> _normalPreviousCounts = {};
-  Map<String, int> get normalPreviousCounts => _normalPreviousCounts;
 
   // Normal mod: bu kamera oturumunda tarananlar (şimdi)
   Map<String, int> _normalScanSession = {};
-  Map<String, int> get normalScanSession => _normalScanSession;
 
   // Normal mod kamera overlay sayaçları
   int get normalSessionScanCount => _normalScanSession.values.fold(0, (a, b) => a + b);
   int get normalTotalScanned =>
       _normalPreviousCounts.values.fold(0, (a, b) => a + b) + normalSessionScanCount;
-  
-
-  bool showReportAfterCamera = false;
 
   // Abonelik özelliği aktif edileceği zaman kullanılacak
   /*
@@ -148,18 +134,13 @@ class QrScanViewModel extends ChangeNotifier {
   List<QrLookupResultWithCount> get history => List.unmodifiable(_history);
   List<QrLookupResultWithCount> get lookupResults => aggregate(_filteredHistory);
 
-  String? _error;
-  String? get error => _error;
-
   String _searchQuery = '';
-  String get searchQuery => _searchQuery;
   void updateSearchQuery(String value) {
     _searchQuery = value;
     notifyListeners();
   }
 
-  static const String _stockTargetKey = 'stock_target';
-  static const String _stockSessionKey = 'stock_session';
+  final StockSessionStore _stockStore = StockSessionStore.instance;
 
   bool get hasActiveStockSession => _targetInventory.isNotEmpty;
 
@@ -212,24 +193,9 @@ class QrScanViewModel extends ChangeNotifier {
     }
 
     // 3. STOK SAYIM OTURUMUNU YÜKLE
-    final stockUser = _stockUserSuffix(prefs);
-    await _migrateLegacyStockKeys(prefs, stockUser);
-    _targetInventory = {};
-    _currentScanSession = {};
-    final stockTarget = prefs.getString('${_stockTargetKey}_$stockUser');
-    if (stockTarget != null) {
-      try {
-        final Map<String, dynamic> decoded = jsonDecode(stockTarget);
-        _targetInventory = decoded.map((k, v) => MapEntry(k, (v as num).toInt()));
-      } catch (_) {}
-    }
-    final stockSession = prefs.getString('${_stockSessionKey}_$stockUser');
-    if (stockSession != null) {
-      try {
-        final Map<String, dynamic> decoded = jsonDecode(stockSession);
-        _currentScanSession = decoded.map((k, v) => MapEntry(k, (v as num).toInt()));
-      } catch (_) {}
-    }
+    final stock = await _stockStore.load();
+    _targetInventory = stock.target;
+    _currentScanSession = stock.scanned;
 
     // Abonelik özelliği aktif edileceği zaman kullanılacak
     // startSubscriptionTimer();
@@ -488,18 +454,6 @@ class QrScanViewModel extends ChangeNotifier {
     return Map.from(_targetInventory);
   }
 
-  // Sayım miktarını 1 artıran fonksiyon
-  void incrementScannedProduct(String barcode) {
-    _currentScanSession[barcode] = (_currentScanSession[barcode] ?? 0) + 1;
-    notifyListeners();
-  }
-  
-  // Yeni bir sayıma başlarken session'ı sıfırlamak istersen:
-  void clearScanSession() {
-    _currentScanSession.clear();
-    notifyListeners();
-  }
-
   void setComparisonMode(bool value) {
     _isComparisonMode = value;
     if (value) {
@@ -522,39 +476,16 @@ class QrScanViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Stok sayımı anahtarlarının sonuna eklenecek kullanıcı id'sini döner
-  String _stockUserSuffix(SharedPreferences prefs) => prefs.getInt('userId')?.toString() ?? 'guest';
+  // Stok sayımının güncel halini telefona kaydeder
+  Future<void> _saveStockSession() => _stockStore.save(_targetInventory, _currentScanSession);
 
-  // Kullanıcı adına bağlı eski stok sayımı kayıtlarını kullanıcı id'sine taşır
-  Future<void> _migrateLegacyStockKeys(SharedPreferences prefs, String stockUser) async {
-    final username = prefs.getString('username');
-    if (stockUser == 'guest' || username == null || username.isEmpty || username == stockUser) return;
-    for (final baseKey in [_stockTargetKey, _stockSessionKey]) {
-      final legacy = prefs.getString('${baseKey}_$username');
-      if (legacy == null) continue;
-      if (!prefs.containsKey('${baseKey}_$stockUser')) {
-        await prefs.setString('${baseKey}_$stockUser', legacy);
-      }
-      await prefs.remove('${baseKey}_$username');
-    }
-  }
-
-  Future<void> _saveStockSession() async {
-    final prefs = await SharedPreferences.getInstance();
-    final stockUser = _stockUserSuffix(prefs);
-    await prefs.setString('${_stockTargetKey}_$stockUser', jsonEncode(_targetInventory));
-    await prefs.setString('${_stockSessionKey}_$stockUser', jsonEncode(_currentScanSession));
-  }
-
+  // Stok sayımını ekrandan ve telefondan siler
   Future<void> clearStockSession() async {
     _targetInventory.clear();
     _currentScanSession.clear();
     _isComparisonMode = false;
     notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    final stockUser = _stockUserSuffix(prefs);
-    await prefs.remove('${_stockTargetKey}_$stockUser');
-    await prefs.remove('${_stockSessionKey}_$stockUser');
+    await _stockStore.clear();
   }
 
   Future<Map<String, dynamic>> getComparisonResults() async {
@@ -640,11 +571,6 @@ class QrScanViewModel extends ChangeNotifier {
     await ExcelService.instance.shareComparisonReport(await getComparisonResults());
   }
 
-  void setShouldShowReport(bool value) {
-    showReportAfterCamera = value;
-    notifyListeners();
-  }
-
   Future<QrLookupResult> _valueToQrResult(String v, Rect rect) async {
     String originalV = v;
     final parsed = Gs1Parser.parse(v);
@@ -717,35 +643,7 @@ class QrScanViewModel extends ChangeNotifier {
   }
 
   void removeQrResultByValue(String value) { _history.removeWhere((h) => h.qr.value == value); notifyListeners(); _persistHistory((userId) => _historyRepository.deleteByValue(userId, value)); }
-  void removeHistoryItem(QrLookupResultWithCount item) { _history.remove(item); notifyListeners(); _deleteEntry(item); }
   void removeByProductName(String productName) { _history.removeWhere((h) => h.qr.data?.productName == productName); notifyListeners(); _persistHistory((userId) => _historyRepository.deleteByProductName(userId, productName)); }
-
-  void incrementQrCountByValue(String value) {
-    if (_history.isEmpty) return;
-    QrLookupResultWithCount? rep;
-    for (final h in _history.reversed) { if (h.qr.value == value) { rep = h; break; } }
-    if (rep == null) return;
-    _appendToHistory([QrLookupResultWithCount(qr: rep.qr, createdAt: DateTime.now().toUtc(), count: 1)]);
-  }
-
-  void decrementQrCountByValue(String value) {
-    for (int i = _history.length - 1; i >= 0; i--) {
-      if (_history[i].qr.value == value) { _deleteEntry(_history.removeAt(i)); notifyListeners(); return; }
-    }
-  }
-
-  // Tek kaydı veritabanından siler, id'si henüz yoksa yazılmamış demektir
-  void _deleteEntry(QrLookupResultWithCount entry) {
-    final id = entry.id;
-    if (id == null) return;
-    _persistHistory((_) => _historyRepository.deleteById(id));
-  }
-
-  Map<String, int> get typeSummary {
-    int bulunan = _history.where((e) => e.qr.found).length;
-    int bulunamayan = _history.where((e) => !e.qr.found).length;
-    return { 'Bulunan': bulunan, 'Bulunamayan': bulunamayan, 'Toplam': _history.length };
-  }
 
   // Bulunan kayıtları seçilen türe göre süzüp Excel olarak paylaşır, aktarılacak kayıt yoksa false döner
   Future<bool> exportFoundToExcel({String type = 'all'}) async {
@@ -917,7 +815,6 @@ class QrScanViewModel extends ChangeNotifier {
 
   @override
   void dispose() {
-    _clearTimer?.cancel();
     _subscriptionTimer?.cancel(); 
     super.dispose();
   }

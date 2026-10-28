@@ -10,7 +10,10 @@ import '../../core/services/its_credential_store.dart';
 import '../../core/services/its_status_service.dart';
 import 'package:flutter/services.dart';
 import '../../core/subscription/subscription_page.dart';
+// Abonelik özelliği aktif edileceği zaman kullanılacak
+// import '../../core/subscription/trial_period_dialog.dart';
 import 'stock_comparison_page.dart';
+import 'widgets/result_card.dart';
 import '../settings/settings_page.dart';
 import '../settings/account_details_page.dart'; // Dosyanın gerçek yolunu yazmalısın
 import '../auth/auth_view_model.dart';
@@ -171,7 +174,7 @@ class _QrScanViewState extends State<_QrScanView> {
         // --- 1. AŞAMA: GİRİŞ BİLGİSİ ---
         if (status.isNotEmpty && status != "Deneme Süresi Doldu" && !_infoDialogShownThisSession) {
           _infoDialogShownThisSession = true;
-          _showTrialPeriodDialog(status);
+          showTrialPeriodDialog(context, status);
           return; 
         }
 
@@ -180,7 +183,7 @@ class _QrScanViewState extends State<_QrScanView> {
           if (Navigator.canPop(context)) {
             Navigator.of(context).pop(); 
           }
-          _showTrialPeriodDialog(status);
+          showTrialPeriodDialog(context, status);
           await prefs.setBool('hasShownExpiredForever', true);
           _vm.removeListener(autoCheckListener);
         } 
@@ -201,131 +204,6 @@ class _QrScanViewState extends State<_QrScanView> {
       // autoCheckListener(); 
     });
   }
-
-  /* ---------------------------------------------------------
-  // KULLANILMAYAN DİYALOG METODU (YORUMA ALINDI)
-  void _showTrialPeriodDialog(String remainingTime) {
-    final bool isExpired = remainingTime == "Deneme Süresi Doldu";
-    const Color primaryColor = Color(0xFFB71C1C);
-    const Color healthTeal = Color(0xFF00ADB5);
-    const Color expiredRed = Color(0xFFD9534F);
-
-    showDialog(
-      context: context,
-      barrierDismissible: true, 
-      builder: (BuildContext context) {
-        return PopScope(
-          canPop: true,
-          child: Dialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-            backgroundColor: Colors.white,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(vertical: 25),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: isExpired 
-                            ? [expiredRed, expiredRed.withOpacity(0.8)]
-                            : [primaryColor, healthTeal],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        borderRadius: const BorderRadius.only(
-                          topLeft: Radius.circular(28),
-                          topRight: Radius.circular(28),
-                        ),
-                      ),
-                      child: Column(
-                        children: [
-                          Icon(
-                            isExpired ? Icons.lock_reset_rounded : Icons.auto_awesome_rounded,
-                            color: Colors.white,
-                            size: 50,
-                          ),
-                          const SizedBox(height: 10),
-                          Text(
-                            isExpired ? "Süreniz Doldu" : "Ücretsiz Deneme",
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-                      child: Column(
-                        children: [
-                          Text(
-                            isExpired
-                                ? "Deneme süreniz sona erdi. Profesyonel araçları kullanmaya devam etmek için aboneliğinizi başlatın."
-                                : "Şu an ücretsiz deneme sürümünü kullanıyorsunuz. Tüm özelliklere tam erişiminiz var.",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.blueGrey.shade700, fontSize: 15, height: 1.4),
-                          ),
-                          const SizedBox(height: 20),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                            decoration: BoxDecoration(
-                              color: isExpired ? expiredRed.withOpacity(0.1) : healthTeal.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(15),
-                              border: Border.all(
-                                color: isExpired ? expiredRed.withOpacity(0.3) : healthTeal.withOpacity(0.3)
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.timer_outlined, size: 18, color: isExpired ? expiredRed : healthTeal),
-                                const SizedBox(width: 8),
-                                const Text("Kalan Durum: ", style: TextStyle(fontWeight: FontWeight.w600)),
-                                Text(remainingTime, style: TextStyle(color: isExpired ? expiredRed : healthTeal, fontWeight: FontWeight.bold)),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 25),
-                          ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: isExpired ? primaryColor : healthTeal,
-                              foregroundColor: Colors.white,
-                              minimumSize: const Size(double.infinity, 52),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                            ),
-                            onPressed: () {
-                              Navigator.pop(context);
-                              // Navigator.push(...)
-                            },
-                            child: const Text("Planları İncele / Abone Ol"),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: IconButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close_rounded, color: Colors.white70, size: 28),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-  --------------------------------------------------------- */
 
   void _onVmChange() {
     final currentCount = _vm.history.length;
@@ -853,12 +731,15 @@ class _QrScanViewState extends State<_QrScanView> {
                 _buildTimeFilterBar(vm),
                 Expanded(
                   child: filteredResults.isEmpty
-                      ? _buildEmptyState()
+                      ? const ScanEmptyState()
                       : ListView.builder(
                           controller: _scrollController,
                           padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
                           itemCount: filteredResults.length,
-                          itemBuilder: (context, index) => _buildResultCard(vm, filteredResults[index]),
+                          itemBuilder: (context, index) => ScanResultCard(
+                            item: filteredResults[index],
+                            onDelete: () => _showSingleDeleteConfirm(this.context, vm, filteredResults[index]),
+                          ),
                         ),
                 ),
               ],
@@ -1694,106 +1575,6 @@ class _QrScanViewState extends State<_QrScanView> {
     );
   }
 
-  Widget _buildResultCard(QrScanViewModel vm, QrLookupResultWithCount item) {
-    final bool found = item.qr.found;
-    // final bool isExpired = item.qr.data?.isExpired ?? false;
-    // final bool expirySoon = item.qr.data?.isExpirySoon ?? false;
-    final String? productName = item.qr.data?.productName;
-    final String displayName = found && productName != null
-        ? productName.toUpperCase()
-        : item.qr.value;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 10, offset: const Offset(0, 4))],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: IntrinsicHeight(
-          child: Row(
-            children: [
-              // -- Sol renkli kenarlık (geçici olarak kapatıldı) --
-              // Container(width: 6, color: found ? Colors.teal : Colors.redAccent),
-              // const SizedBox(width: 12),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // -- Durum ve miad badge'leri (geçici olarak kapatıldı) --
-                      // Row(
-                      //   mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      //   children: [
-                      //     _buildStatusBadge(found),
-                      //     if (isExpired)
-                      //       _buildExpiredBadge()
-                      //     else if (expirySoon)
-                      //       _buildExpiryBadge(),
-                      //   ],
-                      // ),
-                      // const SizedBox(height: 12),
-                      Text(
-                        displayName,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black87,
-                        ),
-                      ),
-                      // -- GTIN / Seri No / SKT satırları (geçici olarak kapatıldı) --
-                      // if (found) ...[
-                      //   const SizedBox(height: 8),
-                      //   _buildMedicineInfo(Icons.qr_code_rounded, 'GTIN', item.qr.data!.gtin ?? '-'),
-                      //   _buildMedicineInfo(Icons.numbers_rounded, 'Seri No', item.qr.data!.serialNo ?? '-'),
-                      //   _buildMedicineInfo(Icons.calendar_today_rounded, 'SKT',
-                      //     item.qr.data!.expiryDate != null
-                      //       ? "${item.qr.data!.expiryDate!.day}/${item.qr.data!.expiryDate!.month}/${item.qr.data!.expiryDate!.year}"
-                      //       : '-'),
-                      // ],
-                    ],
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.only(right: 4),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFEBEE),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        '${item.count}\nadet',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: const Color(0xFFD32F2F),
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                          height: 1.3,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_sweep_rounded, color: Colors.grey),
-                      onPressed: () => _showSingleDeleteConfirm(context, vm, item),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   void _showResetSessionDialog(BuildContext context, QrScanViewModel vm) {
     showDialog(
       context: context,
@@ -1900,68 +1681,6 @@ class _QrScanViewState extends State<_QrScanView> {
     }
 
     return result;
-  }
-
-  // ignore: unused_element
-  Widget _buildStatusBadge(bool found) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: found ? Colors.teal.shade50 : Colors.red.shade50,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        found ? 'Kayıtlı İlaç' : 'Kayıtsız Barkod',
-        style: TextStyle(color: found ? Colors.teal.shade700 : Colors.red.shade700, fontSize: 11, fontWeight: FontWeight.bold),
-      ),
-    );
-  }
-
-  // ignore: unused_element
-  Widget _buildExpiryBadge() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(color: Colors.orange.shade100, borderRadius: BorderRadius.circular(8)),
-      child: Text('MİADI YAKIN', style: TextStyle(color: Colors.orange.shade900, fontSize: 10, fontWeight: FontWeight.bold)),
-    );
-  }
-
-  // ignore: unused_element
-  Widget _buildExpiredBadge() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(color: Colors.red.shade100, borderRadius: BorderRadius.circular(8)),
-      child: Text('MİADI GEÇMİŞ', style: TextStyle(color: Colors.red.shade900, fontSize: 10, fontWeight: FontWeight.bold)),
-    );
-  }
-
-  // ignore: unused_element
-  Widget _buildMedicineInfo(IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Row(
-        children: [
-          Icon(icon, size: 14, color: const Color(0xFFEF9A9A)),
-          const SizedBox(width: 6),
-          Text('$label:', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.black54)),
-          const SizedBox(width: 6),
-          Expanded(child: Text(value, style: const TextStyle(fontSize: 13, color: Colors.black87))),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.inventory_2_outlined, size: 80, color: const Color(0xFFE53935).withOpacity(0.1)),
-          const SizedBox(height: 16),
-          const Text('Henüz tarama yapılmadı', style: TextStyle(color: Colors.grey, fontSize: 16)),
-        ],
-      ),
-    );
   }
 }
 

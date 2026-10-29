@@ -13,13 +13,13 @@ import '../../core/subscription/subscription_page.dart';
 // Abonelik özelliği aktif edileceği zaman kullanılacak
 // import '../../core/subscription/trial_period_dialog.dart';
 import 'stock_comparison_page.dart';
+import 'widgets/export_options_sheet.dart';
 import 'widgets/result_card.dart';
+import 'widgets/scan_filter_bar.dart';
 import '../settings/settings_page.dart';
 import '../settings/account_details_page.dart'; // Dosyanın gerçek yolunu yazmalısın
 import '../auth/auth_view_model.dart';
 
-
-enum TimeFilterPreset { all, last1Hour, today, yesterday }
 
 // Kamera tarama rengi modu: sırasıyla normal -> invert -> hybrid -> normal
 // şeklinde döngüye giriyor (mod değiştirme butonu ile).
@@ -50,7 +50,6 @@ class _QrScanViewState extends State<_QrScanView> {
   int _lastCount = 0;
   TimeFilterPreset _selectedFilter = TimeFilterPreset.all;
   bool _isFlashOn = false; // Flaşın açık olup olmadığını biz takip edeceğiz
-  final FocusNode _searchFocusNode = FocusNode();
 
   // class _QrScanPageState extends State<QrScanPage> {  satırının hemen altına:
   // Sınıfın en üstünde, diğer değişkenlerin yanında:
@@ -251,6 +250,30 @@ class _QrScanViewState extends State<_QrScanView> {
       case TimeFilterPreset.yesterday:
         final yesterday = now.subtract(const Duration(days: 1));
         return createdAt.year == yesterday.year && createdAt.month == yesterday.month && createdAt.day == yesterday.day;
+    }
+  }
+
+  // Seçilen zaman filtresini kaydeder ve view model'e tarih aralığı olarak iletir
+  void _applyTimeFilter(QrScanViewModel vm, TimeFilterPreset preset) {
+    setState(() => _selectedFilter = preset);
+    final now = DateTime.now();
+    switch (preset) {
+      case TimeFilterPreset.all:
+        vm.setDateFilter(null, null);
+        break;
+      case TimeFilterPreset.last1Hour:
+        vm.setDateFilter(now.subtract(const Duration(hours: 1)), null);
+        break;
+      case TimeFilterPreset.today:
+        vm.setDateFilter(DateTime(now.year, now.month, now.day), null);
+        break;
+      case TimeFilterPreset.yesterday:
+        final yesterday = now.subtract(const Duration(days: 1));
+        vm.setDateFilter(
+          DateTime(yesterday.year, yesterday.month, yesterday.day),
+          DateTime(now.year, now.month, now.day),
+        );
+        break;
     }
   }
 
@@ -640,7 +663,7 @@ class _QrScanViewState extends State<_QrScanView> {
           // ✅ PAYLAŞ BUTONU
           _buildActionIcon(
             icon: Icons.share_rounded,
-            onPressed: () => _showExportOptions(context, vm), 
+            onPressed: () => showExportOptionsSheet(context, vm),
           ),
           // ✅ İSTATİSTİK BUTONU
           _buildActionIcon(
@@ -727,8 +750,13 @@ class _QrScanViewState extends State<_QrScanView> {
                       ),
                     ),
                   ),
-                _buildSearchRow(vm),
-                _buildTimeFilterBar(vm),
+                ScanSearchRow(onChanged: vm.updateSearchQuery),
+                ScanTimeFilterBar(
+                  selected: _selectedFilter,
+                  onSelected: (preset) => _applyTimeFilter(vm, preset),
+                  hasItems: vm.history.isNotEmpty,
+                  onClearHistory: () => _showDeleteDialog(context, vm),
+                ),
                 Expanded(
                   child: filteredResults.isEmpty
                       ? const ScanEmptyState()
@@ -1223,74 +1251,6 @@ class _QrScanViewState extends State<_QrScanView> {
     );
   }
 
-  // ✅ SEÇİM MENÜSÜ FONKSİYONU (Bunu build metodunun dışına ekle)
-  void _showExportOptions(BuildContext context, QrScanViewModel vm) {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.all(20.0),
-                child: Text("Excel Olarak Paylaş", 
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-              ),
-              ListTile(
-                leading: const Icon(Icons.list_alt, color: Color(0xFFE53935)),
-                title: const Text("Tüm Liste"),
-                subtitle: const Text("Taranan tüm ilaçları içeren Excel dosyası"),
-                onTap: () {
-                  Navigator.pop(context);
-                  _exportFound(vm, 'all');
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.assignment_return, color: Colors.orange),
-                title: const Text("İade Listesi"),
-                subtitle: const Text("Miadı yaklaşan (90 gün) ilaçları içeren Excel dosyası"),
-                onTap: () {
-                  Navigator.pop(context);
-                  _exportFound(vm, 'return');
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.history_toggle_off_rounded, color: Colors.red),
-                title: const Text("Miadı Geçenler"),
-                subtitle: const Text("Sadece miadı geçmiş ürünleri içeren Excel dosyası"),
-                onTap: () {
-                  Navigator.pop(context);
-                  _exportFound(vm, 'expired');
-                },
-              ),
-              const SizedBox(height: 20),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  // Seçilen türdeki kayıtları Excel olarak paylaşır, kayıt yoksa ya da hata olursa mesaj gösterir
-  Future<void> _exportFound(QrScanViewModel vm, String type) async {
-    try {
-      final exported = await vm.exportFoundToExcel(type: type);
-      if (!exported && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(type == 'expired' ? "Miadı geçmiş ürün bulunamadı." : "Dışa aktarılacak kayıt bulunamadı."))
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Hata: $e")));
-      }
-    }
-  }
-
   Widget _buildActionIcon({required IconData icon, required VoidCallback onPressed, Color color = Colors.white}) {
     return IconButton(
       icon: Container(
@@ -1328,93 +1288,6 @@ class _QrScanViewState extends State<_QrScanView> {
                       ],
                     ),
                   ),
-      ),
-    );
-  }
-
-  Widget _buildSearchRow(QrScanViewModel vm) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      child: TextField(
-        focusNode: _searchFocusNode,
-        onChanged: vm.updateSearchQuery,
-        onTapOutside: (event) => _searchFocusNode.unfocus(),
-        style: const TextStyle(fontSize: 14),
-        decoration: InputDecoration(
-          hintText: 'İlaç adı, GTIN veya Seri No ara...',
-          prefixIcon: const Icon(Icons.search_rounded, color: const Color(0xFFE53935), size: 20),
-          filled: true,
-          fillColor: Colors.white,
-          contentPadding: const EdgeInsets.symmetric(vertical: 0),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide.none,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTimeFilterBar(QrScanViewModel vm) {
-    // 🎯 HATA ÇÖZÜMÜ: 
-    // Eğer ViewModel'inde 'history' adında bir getter varsa onu kullanır.
-    // Yoksa vm.aggregate(_history) mantığına hizmet eden listenin 
-    // dışarıya açık ismini buraya yazmalısın. 
-    // Genelde bu 'vm.history' veya 'vm.items' olur.
-    final bool hasItems = vm.history.isNotEmpty; 
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          // 1. Satır: Filtreler
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
-            child: Row(
-              children: [
-                _filterChip(vm, TimeFilterPreset.all, 'Tümü'),
-                _filterChip(vm, TimeFilterPreset.last1Hour, 'Son 1 Saat'),
-                _filterChip(vm, TimeFilterPreset.today, 'Bugün'),
-                _filterChip(vm, TimeFilterPreset.yesterday, 'Dün'),
-              ],
-            ),
-          ),
-          
-          // 2. Satır: Koşullu Temizle Butonu
-          if (hasItems) 
-            Padding(
-              padding: const EdgeInsets.only(top: 2, right: 4),
-              child: InkWell(
-                onTap: () => _showDeleteDialog(context, vm),
-                borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.delete_outline_rounded, 
-                        size: 14, 
-                        color: Colors.redAccent.withOpacity(0.7)
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        "Geçmişi Temizle",
-                        style: TextStyle(
-                          color: Colors.redAccent.withOpacity(0.7),
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            )
-          else
-            const SizedBox(height: 18), // Buton yokken kayma olmaması için
-        ],
       ),
     );
   }
@@ -1530,50 +1403,6 @@ class _QrScanViewState extends State<_QrScanView> {
     );
   }
 
-
-  Widget _filterChip(QrScanViewModel vm, TimeFilterPreset preset, String label) {
-    final isSelected = _selectedFilter == preset;
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: ChoiceChip(
-        label: Text(label),
-        selected: isSelected,
-        onSelected: (val) { 
-          if (val) {
-            setState(() => _selectedFilter = preset);
-            final now = DateTime.now();
-            switch (preset) {
-              case TimeFilterPreset.all:
-                vm.setDateFilter(null, null);
-                break;
-              case TimeFilterPreset.last1Hour:
-                vm.setDateFilter(now.subtract(const Duration(hours: 1)), null);
-                break;
-              case TimeFilterPreset.today:
-                vm.setDateFilter(DateTime(now.year, now.month, now.day), null);
-                break;
-              case TimeFilterPreset.yesterday:
-                final yesterday = now.subtract(const Duration(days: 1));
-                vm.setDateFilter(
-                  DateTime(yesterday.year, yesterday.month, yesterday.day),
-                  DateTime(now.year, now.month, now.day),
-                );
-                break;
-            }
-          }
-        },
-        selectedColor: const Color(0xFFE53935),
-        backgroundColor: Colors.white,
-        labelStyle: TextStyle(
-          color: isSelected ? Colors.white : const Color(0xFFD32F2F),
-          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-          fontSize: 12,
-        ),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        side: BorderSide(color: isSelected ? Colors.transparent : const Color(0xFFFFCDD2)),
-      ),
-    );
-  }
 
   void _showResetSessionDialog(BuildContext context, QrScanViewModel vm) {
     showDialog(

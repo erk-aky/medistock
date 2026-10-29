@@ -10,6 +10,7 @@ import '../../core/services/excel_service.dart';
 import '../../core/services/local_db_service.dart';
 import '../../core/services/scan_history_repository.dart';
 import '../../core/services/stock_session_store.dart';
+import 'scan_list_filter.dart';
 // Abonelik özelliği aktif edileceği zaman kullanılacak
 // import '../../core/subscription/subscription_page.dart';
 
@@ -113,26 +114,24 @@ class QrScanViewModel extends ChangeNotifier {
   final ScanHistoryRepository _historyRepository = ScanHistoryRepository.instance;
   int? _historyUserId;
 
-  DateTime? _startDate;
-  DateTime? _endDate;
+  TimeFilterPreset _timeFilter = TimeFilterPreset.all;
+  TimeFilterPreset get timeFilter => _timeFilter;
 
-  void setDateFilter(DateTime? start, DateTime? end) {
-    _startDate = start;
-    _endDate = end;
+  // Listede ve Excel paylaşımında kullanılacak zaman filtresini değiştirir
+  void setTimeFilter(TimeFilterPreset preset) {
+    _timeFilter = preset;
     notifyListeners();
   }
 
   List<QrLookupResultWithCount> get _filteredHistory {
-    if (_startDate == null && _endDate == null) return _history;
-    return _history.where((item) {
-      if (_startDate != null && item.createdAt.isBefore(_startDate!)) return false;
-      if (_endDate != null && item.createdAt.isAfter(_endDate!)) return false;
-      return true;
-    }).toList();
+    if (_timeFilter == TimeFilterPreset.all) return _history;
+    final now = DateTime.now();
+    return _history.where((item) => matchesTimeFilter(item.createdAt, _timeFilter, now)).toList();
   }
 
   List<QrLookupResultWithCount> get history => List.unmodifiable(_history);
   List<QrLookupResultWithCount> get lookupResults => aggregate(_filteredHistory);
+  List<QrLookupResultWithCount> get groupedResults => groupByProductName(lookupResults);
 
   String _searchQuery = '';
   void updateSearchQuery(String value) {

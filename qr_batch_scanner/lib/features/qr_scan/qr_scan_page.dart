@@ -13,6 +13,7 @@ import '../../core/subscription/subscription_page.dart';
 // Abonelik özelliği aktif edileceği zaman kullanılacak
 // import '../../core/subscription/trial_period_dialog.dart';
 import 'stock_comparison_page.dart';
+import 'widgets/confirm_dialog.dart';
 import 'widgets/export_options_sheet.dart';
 import 'widgets/result_card.dart';
 import 'widgets/scan_filter_bar.dart';
@@ -48,7 +49,6 @@ class _QrScanViewState extends State<_QrScanView> {
   final ScrollController _scrollController = ScrollController();
   late QrScanViewModel _vm;
   int _lastCount = 0;
-  TimeFilterPreset _selectedFilter = TimeFilterPreset.all;
   bool _isFlashOn = false; // Flaşın açık olup olmadığını biz takip edeceğiz
 
   // class _QrScanPageState extends State<QrScanPage> {  satırının hemen altına:
@@ -239,43 +239,6 @@ class _QrScanViewState extends State<_QrScanView> {
   }
 
 
-
-  bool _matchesFilter(DateTime createdAt, TimeFilterPreset preset) {
-    final now = DateTime.now();
-    switch (preset) {
-      case TimeFilterPreset.all: return true;
-      case TimeFilterPreset.last1Hour: return createdAt.isAfter(now.subtract(const Duration(hours: 1)));
-      case TimeFilterPreset.today:
-        return createdAt.year == now.year && createdAt.month == now.month && createdAt.day == now.day;
-      case TimeFilterPreset.yesterday:
-        final yesterday = now.subtract(const Duration(days: 1));
-        return createdAt.year == yesterday.year && createdAt.month == yesterday.month && createdAt.day == yesterday.day;
-    }
-  }
-
-  // Seçilen zaman filtresini kaydeder ve view model'e tarih aralığı olarak iletir
-  void _applyTimeFilter(QrScanViewModel vm, TimeFilterPreset preset) {
-    setState(() => _selectedFilter = preset);
-    final now = DateTime.now();
-    switch (preset) {
-      case TimeFilterPreset.all:
-        vm.setDateFilter(null, null);
-        break;
-      case TimeFilterPreset.last1Hour:
-        vm.setDateFilter(now.subtract(const Duration(hours: 1)), null);
-        break;
-      case TimeFilterPreset.today:
-        vm.setDateFilter(DateTime(now.year, now.month, now.day), null);
-        break;
-      case TimeFilterPreset.yesterday:
-        final yesterday = now.subtract(const Duration(days: 1));
-        vm.setDateFilter(
-          DateTime(yesterday.year, yesterday.month, yesterday.day),
-          DateTime(now.year, now.month, now.day),
-        );
-        break;
-    }
-  }
 
   Future<bool?> _openLiveScanner({String mode = 'normal'}) async {
     // Kamera ekranını dikeyde kilitli tut: telefon 45 derecenin üzerinde
@@ -601,8 +564,7 @@ class _QrScanViewState extends State<_QrScanView> {
   @override
   Widget build(BuildContext context) {
     final vm = context.watch<QrScanViewModel>();
-    final timeFilteredList = vm.history.where((r) => _matchesFilter(r.createdAt, _selectedFilter)).toList();
-    final filteredResults = _groupByProductName(vm.aggregate(timeFilteredList));
+    final filteredResults = vm.groupedResults;
 
     return Scaffold(
       resizeToAvoidBottomInset: false,
@@ -752,8 +714,8 @@ class _QrScanViewState extends State<_QrScanView> {
                   ),
                 ScanSearchRow(onChanged: vm.updateSearchQuery),
                 ScanTimeFilterBar(
-                  selected: _selectedFilter,
-                  onSelected: (preset) => _applyTimeFilter(vm, preset),
+                  selected: vm.timeFilter,
+                  onSelected: vm.setTimeFilter,
                   hasItems: vm.history.isNotEmpty,
                   onClearHistory: () => _showDeleteDialog(context, vm),
                 ),
@@ -1292,169 +1254,50 @@ class _QrScanViewState extends State<_QrScanView> {
     );
   }
 
-  void _showSingleDeleteConfirm(BuildContext context, QrScanViewModel vm, QrLookupResultWithCount item) {
+  // Tek bir ürünü listeden silmeden önce onay ister
+  Future<void> _showSingleDeleteConfirm(BuildContext context, QrScanViewModel vm, QrLookupResultWithCount item) async {
     final String? productName = item.qr.data?.productName;
     final String displayName = productName != null
         ? productName.toUpperCase()
         : item.qr.value;
 
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        titlePadding: EdgeInsets.zero,
-        title: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: const BoxDecoration(
-            color: Color(0xFF1B262C),
-            borderRadius: BorderRadius.only(topLeft: Radius.circular(20), topRight: Radius.circular(20)),
-          ),
-          child: const Row(
-            children: [
-              Icon(Icons.delete_forever_rounded, color: Colors.white),
-              SizedBox(width: 12),
-              Text("Ürünü Sil", style: TextStyle(color: Colors.white, fontSize: 18)),
-            ],
-          ),
-        ),
-        content: Padding(
-          padding: const EdgeInsets.only(top: 16),
-          child: Text(
-            '"$displayName" listeden silinecek. Emin misiniz?',
-            style: const TextStyle(color: Color(0xFFB71C1C), fontWeight: FontWeight.w500),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("VAZGEÇ", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.redAccent,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            onPressed: () {
-              Navigator.pop(context);
-              if (productName != null) {
-                vm.removeByProductName(productName);
-              } else {
-                vm.removeQrResultByValue(item.qr.value);
-              }
-            },
-            child: const Text("EVET, SİL", style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: "Ürünü Sil",
+      icon: Icons.delete_forever_rounded,
+      message: '"$displayName" listeden silinecek. Emin misiniz?',
+      confirmLabel: "EVET, SİL",
     );
+    if (!confirmed) return;
+    if (productName != null) {
+      vm.removeByProductName(productName);
+    } else {
+      vm.removeQrResultByValue(item.qr.value);
+    }
   }
 
-  void _showDeleteDialog(BuildContext context, QrScanViewModel vm) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        titlePadding: EdgeInsets.zero,
-        title: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: const BoxDecoration(
-            color: Color(0xFF1B262C), // Uygulama ana rengi (Navy)
-            borderRadius: BorderRadius.only(topLeft: Radius.circular(20), topRight: Radius.circular(20)),
-          ),
-          child: const Row(
-            children: [
-              Icon(Icons.auto_delete_rounded, color: Colors.white),
-              SizedBox(width: 12),
-              Text("Geçmişi Temizle", style: TextStyle(color: Colors.white, fontSize: 18)),
-            ],
-          ),
-        ),
-        content: const Padding(
-          padding: EdgeInsets.only(top: 16),
-          child: Text(
-            "Tüm tarama geçmişiniz kalıcı olarak silinecektir. Bu işlemi onaylıyor musunuz?",
-            style: TextStyle(color: Color(0xFFB71C1C), fontWeight: FontWeight.w500),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("VAZGEÇ", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.redAccent,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            onPressed: () {
-              vm.clearAllHistory();
-              Navigator.pop(context);
-            },
-            child: const Text("EVET, SİL", style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
+  // Tüm tarama geçmişini silmeden önce onay ister
+  Future<void> _showDeleteDialog(BuildContext context, QrScanViewModel vm) async {
+    final confirmed = await showConfirmDialog(
+      context,
+      title: "Geçmişi Temizle",
+      icon: Icons.auto_delete_rounded,
+      message: "Tüm tarama geçmişiniz kalıcı olarak silinecektir. Bu işlemi onaylıyor musunuz?",
+      confirmLabel: "EVET, SİL",
     );
+    if (confirmed) vm.clearAllHistory();
   }
 
-
-  void _showResetSessionDialog(BuildContext context, QrScanViewModel vm) {
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        titlePadding: EdgeInsets.zero,
-        title: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: const BoxDecoration(
-            color: Color(0xFF1B262C),
-            borderRadius: BorderRadius.only(
-              topLeft: Radius.circular(20),
-              topRight: Radius.circular(20),
-            ),
-          ),
-          child: const Row(
-            children: [
-              Icon(Icons.restart_alt_rounded, color: Colors.white),
-              SizedBox(width: 12),
-              Text("Oturumu Sıfırla", style: TextStyle(color: Colors.white, fontSize: 18)),
-            ],
-          ),
-        ),
-        content: const Padding(
-          padding: EdgeInsets.only(top: 16),
-          child: Text(
-            "Bu oturumdaki tüm taramaları silmek istediğinize emin misiniz?",
-            style: TextStyle(color: Color(0xFFB71C1C), fontWeight: FontWeight.w500),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text("VAZGEÇ", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.redAccent,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            onPressed: () {
-              vm.resetSessionCount();
-              Navigator.pop(dialogContext);
-            },
-            child: const Text("EVET, SİFIRLA", style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
+  // Bu oturumdaki tarama sayacını sıfırlamadan önce onay ister
+  Future<void> _showResetSessionDialog(BuildContext context, QrScanViewModel vm) async {
+    final confirmed = await showConfirmDialog(
+      context,
+      title: "Oturumu Sıfırla",
+      icon: Icons.restart_alt_rounded,
+      message: "Bu oturumdaki tüm taramaları silmek istediğinize emin misiniz?",
+      confirmLabel: "EVET, SİFIRLA",
     );
+    if (confirmed) vm.resetSessionCount();
   }
 
   Widget _buildScanCounter(String label, int count) {
@@ -1479,37 +1322,6 @@ class _QrScanViewState extends State<_QrScanView> {
         ],
       ),
     );
-  }
-
-  List<QrLookupResultWithCount> _groupByProductName(List<QrLookupResultWithCount> items) {
-    final Map<String, QrLookupResultWithCount> nameToGroup = {};
-    final List<QrLookupResultWithCount> result = [];
-
-    for (final item in items) {
-      if (!item.qr.found) {
-        result.add(item);
-        continue;
-      }
-      final name = item.qr.data?.productName;
-      if (name == null || name.isEmpty) {
-        result.add(item);
-        continue;
-      }
-      if (!nameToGroup.containsKey(name)) {
-        final grouped = QrLookupResultWithCount(
-          qr: item.qr,
-          createdAt: item.createdAt,
-          count: item.count,
-          isOffline: item.isOffline,
-        );
-        nameToGroup[name] = grouped;
-        result.add(grouped);
-      } else {
-        nameToGroup[name]!.count += item.count;
-      }
-    }
-
-    return result;
   }
 }
 

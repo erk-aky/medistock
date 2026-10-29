@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-
-enum TimeFilterPreset { all, last1Hour, today, yesterday }
+import '../scan_list_filter.dart';
 
 class ScanSearchRow extends StatefulWidget {
   final ValueChanged<String> onChanged;

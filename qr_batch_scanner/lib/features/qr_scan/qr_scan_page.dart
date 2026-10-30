@@ -20,7 +20,7 @@ import 'widgets/live_barcode_painter.dart';
 import 'widgets/result_card.dart';
 import 'widgets/scan_filter_bar.dart';
 import '../settings/settings_page.dart';
-import '../settings/account_details_page.dart'; // Dosyanın gerçek yolunu yazmalısın
+import '../settings/account_details_page.dart';
 import '../auth/auth_view_model.dart';
 
 
@@ -53,16 +53,11 @@ class _QrScanViewState extends State<_QrScanView> {
   int _lastCount = 0;
   bool _isFlashOn = false; // Flaşın açık olup olmadığını biz takip edeceğiz
 
-  // class _QrScanPageState extends State<QrScanPage> {  satırının hemen altına:
-  // Sınıfın en üstünde, diğer değişkenlerin yanında:
   late MobileScannerController scannerController;
   _ScanColorMode _colorMode = _ScanColorMode.normal;
-  bool _isCameraRefreshing = false; // BU SATIRI EKLE (Sayfayı yenilemek için kullanacağız)
+  bool _isCameraRefreshing = false;
 
   void _initScanner() {
-    // Eğer hali hazırda bir controller varsa temizlik yapıyoruz
-    // scannerController?.dispose();
-
     scannerController = MobileScannerController(
       detectionSpeed: DetectionSpeed.unrestricted,
       cameraResolution: const Size(1920, 1080),
@@ -154,8 +149,7 @@ class _QrScanViewState extends State<_QrScanView> {
     
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _vm = context.read<QrScanViewModel>();
-      
-      // ignore: unused_element
+
       /* ---------------------------------------------------------
       // ABONELİK VE DENEME SÜRESİ KONTROL MANTIĞI (DEVRE DIŞI BIRAKILDI)
       // İleride tekrar aktif etmek isterseniz bu bloğu ve alttaki listener'ı açın.
@@ -920,8 +914,6 @@ class _QrScanViewState extends State<_QrScanView> {
     );
   }
 
-  // Eski hali: void _showSummaryDialog(BuildContext context, int products, int quantity)
-  // GÜNCEL KOD:
   void _showSummaryDialog(BuildContext context, int products, int quantity, QrScanViewModel vm) {
     showDialog(
       context: context,

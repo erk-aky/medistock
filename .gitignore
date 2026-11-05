@@ -29,3 +29,7 @@ QrBackend/appsettings.json
 QrBackend/appsettings.Development.json
 QrBackend/output_result.jpg
 QrBackend/publish_output/
+
+# --- Deployment ---
+deployment/config/.env.production*
+!deployment/config/.env.production.example

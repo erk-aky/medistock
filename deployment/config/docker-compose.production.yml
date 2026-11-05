@@ -1,0 +1,34 @@
+name: medistock
+
+services:
+  api:
+    build:
+      context: ../../QrBackend
+      dockerfile: Dockerfile
+    image: medistock-api:latest
+    container_name: medistock_api_prod
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      # TİTCK senkronu yerel saate göre çalışır, konteyner varsayılanı UTC.
+      TZ: Europe/Istanbul
+    ports:
+      - "${API_PORT:-5289}:5289"
+    # Veritabanı Windows tarafında olursa bağlantı cümlesinde host.docker.internal yazılır.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - dataprotection-keys:/home/app/.aspnet/DataProtection-Keys
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  dataprotection-keys:
+
+networks:
+  default:
+    name: medistock-network

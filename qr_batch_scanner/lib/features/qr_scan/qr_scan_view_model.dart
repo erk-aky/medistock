@@ -1,93 +1,24 @@
-import 'dart:io';
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mobile_scanner/mobile_scanner.dart'; 
-import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart' as mlkit;
 import 'package:flutter/services.dart';
 import 'dart:async';
-import 'package:excel/excel.dart';
-import 'package:file_picker/file_picker.dart';
-import 'package:http/http.dart' as http;
 
-import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
-
+import '../../core/gs1/gs1_parser.dart';
 import '../../core/models/qr_lookup_result.dart';
-import '../../core/services/qr_service.dart';
-import '../../core/services/qr_mlkit_service.dart';
-import '../../core/local/db_helper.dart';
-import '../../core/services/local_db_service.dart'; 
-import '../../core/subscription/subscription_page.dart';
-import '../auth/auth_view_model.dart';
-import 'package:provider/provider.dart';
-import '../../core/constants/api_constants.dart'; // Dosya yolun AuthService ile aynıysa bu şekilde olmalı
-
-class QrLookupResultWithCount {
-  final QrLookupResult qr;
-  final DateTime createdAt;
-  int count;
-  bool isOffline;
-
-  QrLookupResultWithCount({
-    required this.qr,
-    DateTime? createdAt,
-    this.count = 1,
-    this.isOffline = false,
-  }) : createdAt = createdAt ?? DateTime.now().toUtc(); // Varsayılan UTC yapıldı
-
-  Map<String, dynamic> toJson() {
-    return {
-      'qr': qr.toJson(),
-      'count': count,
-      'isOffline': isOffline,
-      'createdAt': createdAt.toIso8601String(),
-    };
-  }
-
-  factory QrLookupResultWithCount.fromJson(Map<String, dynamic> json) {
-    final qrMap = json['qr'] as Map<String, dynamic>? ?? {};
-    final qr = QrLookupResult.fromJson(qrMap);
-
-    DateTime parsedCreatedAt;
-    try {
-      final raw = json['createdAt'];
-      if (raw is String && raw.isNotEmpty) {
-        parsedCreatedAt = DateTime.parse(raw).toUtc(); // UTC'ye zorla
-      } else {
-        parsedCreatedAt = DateTime.fromMillisecondsSinceEpoch(0).toUtc();
-      }
-    } catch (_) {
-      parsedCreatedAt = DateTime.fromMillisecondsSinceEpoch(0).toUtc();
-    }
-
-    return QrLookupResultWithCount(
-      qr: qr,
-      createdAt: parsedCreatedAt,
-      count: (json['count'] ?? 1) as int,
-      isOffline: (json['isOffline'] ?? false) as bool,
-    );
-  }
-}
+import '../../core/services/excel_service.dart';
+import '../../core/services/local_db_service.dart';
+import '../../core/services/scan_history_repository.dart';
+import '../../core/services/stock_session_store.dart';
+import 'scan_list_filter.dart';
+// Abonelik özelliği aktif edileceği zaman kullanılacak
+// import '../../core/subscription/subscription_page.dart';
 
 class QrScanViewModel extends ChangeNotifier {
-  final ImagePicker _picker = ImagePicker();
-  final QrService _qrService = QrService();
-  final QrMlkitService _mlkit_service = QrMlkitService();
   final LocalDbService _localDbService = LocalDbService();
-
-  Function(String msg)? onScanError;
-
-  File? _lastScannedFile;
-  File? get lastScannedFile => _lastScannedFile;
-
-  List<QrLookupResult> _lastResults = [];
-  List<QrLookupResult> get lastResults => _lastResults;
 
   List<Barcode> _detectedBarcodes = [];
   List<Barcode> get detectedBarcodes => _detectedBarcodes;
-  Timer? _clearTimer;
 
   Size? _lastImageSize;
   Size? get lastImageSize => _lastImageSize;
@@ -105,13 +36,9 @@ class QrScanViewModel extends ChangeNotifier {
   // Karşılaştırmalı sayım için hedef stok verileri
   Map<String, int> _targetInventory = {};
   Map<String, int> get targetInventory => _targetInventory;
-  
-  bool _isCompareMode = false;
-  bool get isCompareMode => _isCompareMode;
 
   // O anki sayımda hangi barkoddan kaç tane okunduğunu tutar (stok modu)
   Map<String, int> _currentScanSession = {};
-  Map<String, int> get currentScanSession => _currentScanSession;
 
   int _sessionScanCount = 0;
   int get sessionScanCount => _sessionScanCount;
@@ -122,20 +49,17 @@ class QrScanViewModel extends ChangeNotifier {
 
   // Normal mod: kamera açılmadan önce tarananlar (önceki)
   Map<String, int> _normalPreviousCounts = {};
-  Map<String, int> get normalPreviousCounts => _normalPreviousCounts;
 
   // Normal mod: bu kamera oturumunda tarananlar (şimdi)
   Map<String, int> _normalScanSession = {};
-  Map<String, int> get normalScanSession => _normalScanSession;
 
   // Normal mod kamera overlay sayaçları
   int get normalSessionScanCount => _normalScanSession.values.fold(0, (a, b) => a + b);
   int get normalTotalScanned =>
       _normalPreviousCounts.values.fold(0, (a, b) => a + b) + normalSessionScanCount;
-  
 
-  bool showReportAfterCamera = false;
-
+  // Abonelik özelliği aktif edileceği zaman kullanılacak
+  /*
   bool get canExport {
     final now = DateTime.now().toUtc();
     
@@ -152,6 +76,7 @@ class QrScanViewModel extends ChangeNotifier {
     // Diğer tüm durumlarda (süre bittiyse veya tarihler yoksa) engelle
     return false;
   }
+  */
 
   String get remainingTrialTime {
     if (_subscriptionStatus != "Trialing" || _trialEndDate == null) return "";
@@ -186,54 +111,40 @@ class QrScanViewModel extends ChangeNotifier {
   bool get isProcessing => _isProcessing;
 
   final List<QrLookupResultWithCount> _history = [];
+  final ScanHistoryRepository _historyRepository = ScanHistoryRepository.instance;
+  int? _historyUserId;
 
-  DateTime? _startDate;
-  DateTime? _endDate;
+  TimeFilterPreset _timeFilter = TimeFilterPreset.all;
+  TimeFilterPreset get timeFilter => _timeFilter;
 
-  void setDateFilter(DateTime? start, DateTime? end) {
-    _startDate = start;
-    _endDate = end;
+  // Listede ve Excel paylaşımında kullanılacak zaman filtresini değiştirir
+  void setTimeFilter(TimeFilterPreset preset) {
+    _timeFilter = preset;
     notifyListeners();
   }
 
   List<QrLookupResultWithCount> get _filteredHistory {
-    if (_startDate == null && _endDate == null) return _history;
-    return _history.where((item) {
-      if (_startDate != null && item.createdAt.isBefore(_startDate!)) return false;
-      if (_endDate != null && item.createdAt.isAfter(_endDate!)) return false;
-      return true;
-    }).toList();
+    if (_timeFilter == TimeFilterPreset.all) return _history;
+    final now = DateTime.now();
+    return _history.where((item) => matchesTimeFilter(item.createdAt, _timeFilter, now)).toList();
   }
 
   List<QrLookupResultWithCount> get history => List.unmodifiable(_history);
   List<QrLookupResultWithCount> get lookupResults => aggregate(_filteredHistory);
-
-  String? _error;
-  String? get error => _error;
+  List<QrLookupResultWithCount> get groupedResults => groupByProductName(lookupResults);
 
   String _searchQuery = '';
-  String get searchQuery => _searchQuery;
   void updateSearchQuery(String value) {
     _searchQuery = value;
     notifyListeners();
   }
 
-  static const String _prefsKey = 'qr_lookup_results';
-  static const String _stockTargetKey = 'stock_target';
-  static const String _stockSessionKey = 'stock_session';
+  final StockSessionStore _stockStore = StockSessionStore.instance;
 
   bool get hasActiveStockSession => _targetInventory.isNotEmpty;
 
   QrScanViewModel() {
     loadSavedResults();
-  }
-
-  Future<String> _prefsKeyForCurrentUser(SharedPreferences prefs) async {
-    final username = prefs.getString('username');
-    if (username != null && username.isNotEmpty) {
-      return 'qr_lookup_results_$username';
-    }
-    return _prefsKey;
   }
 
   Future<void> loadSavedResults() async {
@@ -266,16 +177,14 @@ class QrScanViewModel extends ChangeNotifier {
     }
     
     // 2. TARAMA GEÇMİŞİNİ YÜKLE
-    final key = await _prefsKeyForCurrentUser(prefs);
-    final String? savedHistory = prefs.getString(key);
-    
-    if (savedHistory != null) {
+    _historyUserId = prefs.getInt('userId');
+    _history.clear();
+    if (_historyUserId != null) {
       try {
-        final List<dynamic> decoded = jsonDecode(savedHistory);
-        _history.clear();
-        _history.addAll(
-          decoded.map((item) => QrLookupResultWithCount.fromJson(item)).toList()
-        );
+        _history.addAll(await _historyRepository.load(
+          _historyUserId!,
+          legacyUsername: prefs.getString('username'),
+        ));
         debugPrint("✅ Hafızadan ${_history.length} adet kayıt yüklendi.");
       } catch (e) {
         debugPrint("❌ Geçmiş veriler yüklenirken hata oluştu: $e");
@@ -283,28 +192,21 @@ class QrScanViewModel extends ChangeNotifier {
     }
 
     // 3. STOK SAYIM OTURUMUNU YÜKLE
-    final username = prefs.getString('username') ?? 'guest';
-    final stockTarget = prefs.getString('${_stockTargetKey}_$username');
-    if (stockTarget != null) {
-      try {
-        final Map<String, dynamic> decoded = jsonDecode(stockTarget);
-        _targetInventory = decoded.map((k, v) => MapEntry(k, (v as num).toInt()));
-      } catch (_) {}
-    }
-    final stockSession = prefs.getString('${_stockSessionKey}_$username');
-    if (stockSession != null) {
-      try {
-        final Map<String, dynamic> decoded = jsonDecode(stockSession);
-        _currentScanSession = decoded.map((k, v) => MapEntry(k, (v as num).toInt()));
-      } catch (_) {}
-    }
+    final stock = await _stockStore.load();
+    _targetInventory = stock.target;
+    _currentScanSession = stock.scanned;
 
-    // Timer'ı başlat ve UI'ı güncelle
-    startSubscriptionTimer();
+    // 4. SKT UYARI AYINI YÜKLE
+    _expiryMonthLimit = prefs.getInt('expiry_month_limit') ?? 6;
+
+    // Abonelik özelliği aktif edileceği zaman kullanılacak
+    // startSubscriptionTimer();
     notifyListeners();
   }
-  
 
+
+  // Abonelik özelliği aktif edileceği zaman kullanılacak
+  /*
   void startSubscriptionTimer() {
     _subscriptionTimer?.cancel(); 
     
@@ -329,12 +231,17 @@ class QrScanViewModel extends ChangeNotifier {
       }
     });
   }
+  */
 
-  Future<void> _saveResults() async {
-    final prefs = await SharedPreferences.getInstance();
-    final key = await _prefsKeyForCurrentUser(prefs);
-    final jsonList = _history.map((r) => r.toJson()).toList();
-    await prefs.setString(key, jsonEncode(jsonList));
+  // Geçmişteki değişikliği veritabanına yazar, hata olursa ekrandaki listeyi bozmadan loga yazar
+  Future<void> _persistHistory(Future<void> Function(int userId) write) async {
+    final userId = _historyUserId;
+    if (userId == null) return;
+    try {
+      await write(userId);
+    } catch (e) {
+      debugPrint("❌ Geçmiş kaydedilemedi: $e");
+    }
   }
 
   final Map<String, (Barcode, DateTime)> _activeBarcodesMap = {};
@@ -432,11 +339,6 @@ class QrScanViewModel extends ChangeNotifier {
           _normalScanSession[val] = (_normalScanSession[val] ?? 0) + 1;
         }
       }
-
-      // Sadece normal modda geçmişi kalıcı hafızaya kaydet
-      if (!isComparisonMode) {
-        await _saveResults();
-      }
     } catch (e) {
       debugPrint("❌ Arka Plan Hatası: $e");
     } finally {
@@ -518,7 +420,7 @@ class QrScanViewModel extends ChangeNotifier {
 
   Future<void> _processSingleBarcode(String value) async {
     final qr = await _valueToQrResult(value, Rect.zero);
-    _appendToHistory([QrLookupResultWithCount(qr: qr, createdAt: DateTime.now().toUtc(), isOffline: _offlineMode)]);
+    await _appendToHistory([QrLookupResultWithCount(qr: qr, createdAt: DateTime.now().toUtc(), isOffline: _offlineMode)]);
   }
 
   void clearCurrentSession() {
@@ -538,279 +440,20 @@ class QrScanViewModel extends ChangeNotifier {
 
   // Tüm listeyi temizler
   void clearAllHistory() async {
-    // 1. Önce RAM'deki listeyi temizle
     _history.clear();
-
-    // 2. Senin bulduğun fonksiyonu çağırarak boş listeyi SharedPreferences'a yaz
-    // Bu sayede uygulama açılıp kapandığında liste boş kalacak.
-    await _saveResults();
-
-    // 3. UI'ı bilgilendir ki ekran hemen boşalsın
     notifyListeners();
+    await _persistHistory((userId) => _historyRepository.clear(userId));
   }
 
-  Future<void> openCameraAndScan({bool allowGalleryFallback = true}) async {
-    _error = null;
-    final Stopwatch totalStopwatch = Stopwatch()..start();
-    try {
-      _isProcessing = true;
-      _lastScannedFile = null;
-      _lastResults = [];
-      notifyListeners();
+  // Seçilen Excel'deki barkod ve miktarları hedef sayım olarak yükler, dosya seçilmezse null döner
+  Future<Map<String, int>?> pickExcelFile() async {
+    final loaded = await ExcelService.instance.pickStockFile();
+    if (loaded == null) return null;
 
-      XFile? file = await _picker.pickImage(source: ImageSource.camera, imageQuality: 80, maxWidth: 2000, maxHeight: 2000);
-      if (file == null && allowGalleryFallback) {
-        file = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 80, maxWidth: 2000, maxHeight: 2000);
-      }
-
-      if (file == null) { _isProcessing = false; notifyListeners(); return; }
-
-      final imageFile = File(file.path);
-      _lastScannedFile = imageFile;
-      
-      if (_offlineMode) {
-        await _handleOfflineScan(imageFile);
-      } else {
-        await _handleOnlineScan(imageFile, totalStopwatch);
-      }
-
-      if (_error != null && onScanError != null) onScanError!(_error!);
-    } catch (e) {
-      _error = 'Hata: $e';
-      if (onScanError != null) onScanError!(_error!);
-    } finally {
-      _isProcessing = false;
-      notifyListeners();
-    }
-  }
-
-  // 1. Kullanıcının dış IP adresini öğrenmek için yardımcı fonksiyon
-  Future<String> getPublicIP() async {
-    try {
-      final response = await http.get(Uri.parse('https://api.ipify.org')).timeout(const Duration(seconds: 5));
-      if (response.statusCode == 200) {
-        return response.body;
-      }
-    } catch (e) {
-      print("IP tespiti başarısız: $e");
-    }
-    return "Tespit edilemedi";
-  }
-
-  Future<String?> checkDrugStatusWithIts({
-    required BuildContext context,
-    required String gtin,
-    required String sn,
-    required String lot,
-    required String skt,
-  }) async {
-    final prefs = await SharedPreferences.getInstance();
-
-    final authVm = Provider.of<AuthViewModel>(context, listen: false);
-    final userIdStr = authVm.userId?.toString() ?? "guest";
-
-    final glnKey = 'local_gln_$userIdStr';
-    final passKey = 'local_its_password_$userIdStr';
-
-    final String gln = prefs.getString(glnKey)?.trim() ?? "";
-    final String pass = prefs.getString(passKey)?.trim() ?? "";
-
-    // İTS Resmi Servisleri
-    const String tokenUrl = "https://its2.saglik.gov.tr/token/app/token/";
-    const String statusUrl = "https://its2.saglik.gov.tr/reference/app/check_status/";
-
-    // 🔹 Senin Backend URL'in (AuthService'deki gibi ApiConstants'tan alıyoruz)
-    final String backendResolveUrl = '${ApiConstants.baseUrl}/api/its/resolve-code';
-
-    try {
-      print("🔑 [ADIM 1] İTS Token İsteniyor...");
-
-      final tokenResponse = await http.post(
-        Uri.parse(tokenUrl),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          "username": gln,
-          "password": pass,
-        }),
-      ).timeout(const Duration(seconds: 10));
-
-      if (tokenResponse.statusCode == 200) {
-        final tokenData = jsonDecode(tokenResponse.body);
-        String accessToken = tokenData['access_token'] ?? tokenData['accessToken'] ?? tokenData['token'] ?? "";
-
-        if (accessToken.isEmpty) return "Hata: İTS yetki anahtarı alınamadı.";
-
-        print("🌐 [ADIM 2] İlaç İTS'ye Sorgulanıyor...");
-
-        final Map<String, dynamic> requestBody = {
-          "productList": [
-            {
-              "gtin": gtin.padLeft(14, '0'),
-              "sn": sn,
-              "bn": lot,
-              "xd": skt.length >= 10 ? skt.substring(0, 10) : skt
-            }
-          ]
-        };
-
-        final response = await http.post(
-          Uri.parse(statusUrl),
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $accessToken',
-          },
-          body: jsonEncode(requestBody),
-        );
-
-        if (response.statusCode == 200) {
-          final resData = jsonDecode(response.body);
-          var uc = resData['responseObjectList']?[0]?['uc'] ?? "Bilinmiyor";
-
-          print("📦 [ITS] Dönen UC Kodu: $uc");
-
-          // 🔹 [ADIM 3] UC kodunu Kendi Backend'ine gönder (Ngrok ayarıyla birlikte)
-          try {
-            print("🌐 [ADIM 3] Backend'den resmi açıklama isteniyor...");
-            final backendResponse = await http.post(
-              Uri.parse(backendResolveUrl),
-              headers: {
-                'Content-Type': 'application/json',
-                'ngrok-skip-browser-warning': 'true', // Ngrok ekranını atlamak için kritik!
-              },
-              body: jsonEncode({"code": uc.toString()}),
-            ).timeout(const Duration(seconds: 10));
-
-            if (backendResponse.statusCode == 200) {
-              final backendData = jsonDecode(backendResponse.body);
-              return backendData['message'] ?? uc.toString();
-            } else {
-              return "Kod: $uc (Açıklama getirilemedi)";
-            }
-          } catch (e) {
-            print("⚠️ Backend Hatası: $e");
-            return "Kod: $uc (Sunucu bağlantı hatası)";
-          }
-        } else {
-          return "İTS servisi hata döndürdü: ${response.statusCode}";
-        }
-      } else if (tokenResponse.statusCode == 401 || tokenResponse.statusCode == 403) {
-        return "İTS Kullanıcı adı veya şifre hatalı.";
-      } else {
-        return "İTS Bağlantı hatası: ${tokenResponse.statusCode}";
-      }
-    } on SocketException {
-      return "İnternet bağlantısı yok veya sunucuya ulaşılamıyor.";
-    } catch (e) {
-      return "Beklenmedik hata: $e";
-    }
-  }
-
-
-  // ✅ EXCEL DOSYASI SEÇME VE ANALİZ ETME
-  Future<Map<String, int>?> pickExcelFile(BuildContext context) async {
-    try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['xlsx', 'xls'],
-        withData: false, // Performans için: Sadece yolu alalım
-      );
-
-      if (result != null && result.files.single.path != null) {
-        final file = File(result.files.single.path!);
-        final bytes = file.readAsBytesSync();
-        final excel = Excel.decodeBytes(bytes);
-
-        _targetInventory.clear();
-
-        for (var table in excel.tables.keys) {
-          var rows = excel.tables[table]!.rows;
-          if (rows.isEmpty) continue;
-
-          int barkodIndex = -1;
-          int miktarIndex = -1;
-
-          // --- Başlık Analizi ---
-          var headerRow = rows.first;
-          for (int i = 0; i < headerRow.length; i++) {
-            // .value?.toString() yerine daha güvenli olan yöntem:
-            String val = headerRow[i]?.value?.toString().toLowerCase().trim() ?? "";
-            if (val.contains("barkod") || val.contains("gtin")) barkodIndex = i;
-            if (val.contains("miktar") || val.contains("adet")) miktarIndex = i;
-          }
-
-          if (barkodIndex == -1 || miktarIndex == -1) {
-            throw "Excel'de 'Barkod' ve 'Miktar' sütunları bulunamadı!";
-          }
-
-          // --- Veri Okuma ---
-          for (int i = 1; i < rows.length; i++) {
-            var row = rows[i];
-            
-            // Satır uzunluğu indexlerden küçükse hata almamak için kontrol:
-            if (row.length <= barkodIndex || row.length <= miktarIndex) continue;
-
-            // Veriyi güvenli çekme
-            var barkodRaw = row[barkodIndex]?.value?.toString() ?? "";
-            var barkod = barkodRaw.trim();
-            
-            var miktarRaw = row[miktarIndex]?.value?.toString() ?? "0";
-            int miktar = int.tryParse(miktarRaw) ?? 0;
-
-            if (barkod.isNotEmpty && miktar > 0) {
-              _targetInventory[barkod] = miktar;
-            }
-          }
-        }
-
-        notifyListeners();
-        unawaited(_saveStockSession());
-        // Önemli: Boş bir map dönse bile null dönmediği için View tarafı
-        // işlemin bittiğini anlar ama miktar 0 ise diyalog göstermez.
-        return Map.from(_targetInventory);
-      }
-      return null;
-    } catch (e) {
-      debugPrint("Excel okuma hatası detayı: $e");
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Hata: $e"), backgroundColor: Colors.red),
-        );
-      }
-      return null;
-    }
-  }
-
-  // Okunan barkodun Excel listesindeki durumunu kontrol eder
-  String checkBarcodeStatus(String rawBarcode) {
-    // Senin algoritmanla GTIN'i ayıkla
-    String pureBarcode = _getGtinFromRaw(rawBarcode);
-
-    print("🎯 AYIKLANAN BARKOD: $pureBarcode");
-
-    if (_targetInventory.isEmpty) return "no_list";
-    
-    if (!_targetInventory.containsKey(pureBarcode)) {
-      print("❌ LİSTEDE YOK: $pureBarcode");
-      return "not_in_list";
-    }
-
-    int target = _targetInventory[pureBarcode]!;
-    int current = _currentScanSession[pureBarcode] ?? 0;
-
-    if (current < target) return "correct";
-    return "excess";
-  }
-
-  // Sayım miktarını 1 artıran fonksiyon
-  void incrementScannedProduct(String barcode) {
-    _currentScanSession[barcode] = (_currentScanSession[barcode] ?? 0) + 1;
+    _targetInventory = loaded;
     notifyListeners();
-  }
-  
-  // Yeni bir sayıma başlarken session'ı sıfırlamak istersen:
-  void clearScanSession() {
-    _currentScanSession.clear();
-    notifyListeners();
+    unawaited(_saveStockSession());
+    return Map.from(_targetInventory);
   }
 
   void setComparisonMode(bool value) {
@@ -835,22 +478,16 @@ class QrScanViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _saveStockSession() async {
-    final prefs = await SharedPreferences.getInstance();
-    final username = prefs.getString('username') ?? 'guest';
-    await prefs.setString('${_stockTargetKey}_$username', jsonEncode(_targetInventory));
-    await prefs.setString('${_stockSessionKey}_$username', jsonEncode(_currentScanSession));
-  }
+  // Stok sayımının güncel halini telefona kaydeder
+  Future<void> _saveStockSession() => _stockStore.save(_targetInventory, _currentScanSession);
 
+  // Stok sayımını ekrandan ve telefondan siler
   Future<void> clearStockSession() async {
     _targetInventory.clear();
     _currentScanSession.clear();
     _isComparisonMode = false;
     notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    final username = prefs.getString('username') ?? 'guest';
-    await prefs.remove('${_stockTargetKey}_$username');
-    await prefs.remove('${_stockSessionKey}_$username');
+    await _stockStore.clear();
   }
 
   Future<Map<String, dynamic>> getComparisonResults() async {
@@ -931,204 +568,34 @@ class QrScanViewModel extends ChangeNotifier {
     };
   }
 
-  // QrScanViewModel dosyasının en altına ekle
-  Future<void> exportComparisonReport(BuildContext context) async {
-    try {
-      final results = await getComparisonResults();
-      final stats = results['stats'];
-      final List missing = results['missing'] ?? [];
-      final List extra = results['extra'] ?? [];
-      final List matched = results['matched'] ?? [];
-
-      var excel = Excel.createExcel();
-      String sheetName = "Stok Analiz Raporu";
-      excel.rename("Sheet1", sheetName);
-      Sheet sheetObject = excel[sheetName];
-
-      // ✅ RENK HATASI DÜZELTİLDİ: ExcelColor.fromHexString kullanıyoruz
-      CellStyle headerStyle = CellStyle(
-        bold: true,
-        fontFamily: getFontFamily(FontFamily.Calibri),
-        backgroundColorHex: ExcelColor.fromHexString("#0F4C75"), // Koyu Mavi
-        fontColorHex: ExcelColor.fromHexString("#FFFFFF"),       // Beyaz
-        horizontalAlign: HorizontalAlign.Center,
-      );
-
-      CellStyle subHeaderStyle = CellStyle(
-        bold: true,
-        backgroundColorHex: ExcelColor.fromHexString("#F1F5F9"), // Açık Gri
-        horizontalAlign: HorizontalAlign.Center,
-      );
-
-      // Başlık Bölümü
-      sheetObject.merge(CellIndex.indexByString("A1"), CellIndex.indexByString("F1"));
-      var cellA1 = sheetObject.cell(CellIndex.indexByString("A1"));
-      cellA1.value = TextCellValue("ECZANE STOK SAYIM ANALİZ RAPORU");
-      cellA1.cellStyle = headerStyle;
-
-      // Özet Bilgiler
-      sheetObject.cell(CellIndex.indexByString("A2")).value = TextCellValue("Tarih:");
-      sheetObject.cell(CellIndex.indexByString("B2")).value = TextCellValue(DateTime.now().toString().substring(0, 16));
-
-      sheetObject.cell(CellIndex.indexByString("A3")).value = TextCellValue("Beklenen Toplam:");
-      sheetObject.cell(CellIndex.indexByString("B3")).value = IntCellValue(stats['expected'] ?? 0);
-      sheetObject.cell(CellIndex.indexByString("C3")).value = TextCellValue("Okunan:");
-      sheetObject.cell(CellIndex.indexByString("D3")).value = IntCellValue(stats['scanned'] ?? 0);
-      sheetObject.cell(CellIndex.indexByString("E3")).value = TextCellValue("Doğruluk:");
-      sheetObject.cell(CellIndex.indexByString("F3")).value = TextCellValue("%${stats['accuracy']}");
-
-      // Tablo Kolon Başlıkları
-      List<String> headers = ["DURUM", "ÜRÜN ADI", "BARKOD", "BEKLENEN", "OKUNAN", "FARK"];
-      for (var i = 0; i < headers.length; i++) {
-        var cell = sheetObject.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 5));
-        cell.value = TextCellValue(headers[i]);
-        cell.cellStyle = subHeaderStyle;
-      }
-
-      int currentRow = 6;
-
-      void addRows(List items, String status) {
-        for (var item in items) {
-          sheetObject.cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: currentRow)).value = TextCellValue(status);
-          sheetObject.cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: currentRow)).value = TextCellValue(item['name']?.toString() ?? "Bilinmeyen Ürün");
-          sheetObject.cell(CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: currentRow)).value = TextCellValue(item['barcode']?.toString() ?? "-");
-          sheetObject.cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: currentRow)).value = IntCellValue(item['expected'] ?? 0);
-          sheetObject.cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: currentRow)).value = IntCellValue(item['scanned'] ?? 0);
-          
-          int diff = (item['scanned'] ?? 0) - (item['expected'] ?? 0);
-          sheetObject.cell(CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: currentRow)).value = IntCellValue(diff);
-          
-          currentRow++;
-        }
-      }
-
-      addRows(missing, "EKSIK");
-      addRows(extra, "FAZLA/TANIMSIZ");
-      addRows(matched, "TAMAM");
-
-      final directory = await getTemporaryDirectory();
-      final String filePath = "${directory.path}/stok_analiz_raporu.xlsx";
-      final fileBytes = excel.save();
-      
-      if (fileBytes != null) {
-        File(filePath)
-          ..createSync(recursive: true)
-          ..writeAsBytesSync(fileBytes);
-
-        await Share.shareXFiles(
-          [XFile(filePath)],
-          subject: 'Stok Sayım Analiz Raporu',
-        );
-      }
-    } catch (e) {
-      debugPrint("Excel Export Hatası: $e");
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Excel Hatası: ${e.toString()}")),
-        );
-      }
-    }
-  }
-
-  void setShouldShowReport(bool value) {
-    showReportAfterCamera = value;
-    notifyListeners();
-  }
-
-  Future<void> _handleOnlineScan(File imageFile, Stopwatch totalStopwatch) async {
-    try {
-      _error = null;
-      _lastResults = [];
-      notifyListeners(); 
-      final response = await _qrService.uploadQrImage(imageFile);
-      _lastResults = response.results;
-
-      if (_lastResults.isEmpty) {
-        _error = "Fotoğrafta barkod bulunamadı."; 
-        HapticFeedback.vibrate(); 
-      } else {
-        _error = null;
-        HapticFeedback.lightImpact(); 
-        final nowEntries = response.results.map((e) => QrLookupResultWithCount(qr: e, createdAt: DateTime.now().toUtc(), isOffline: false)).toList();
-        _appendToHistory(nowEntries);
-        await _saveResults();
-      }
-    } catch (e) {
-      await _handleOfflineScan(imageFile);
-    } finally {
-      notifyListeners();
-    }
-  }
-
-  Future<void> _handleOfflineScan(File imageFile) async {
-    try {
-      _error = null;
-      _lastResults = [];
-      notifyListeners();
-
-      final mlkit.BarcodeScanner barcodeScanner = mlkit.BarcodeScanner(formats: [mlkit.BarcodeFormat.dataMatrix, mlkit.BarcodeFormat.qrCode]);
-      final mlkit.InputImage inputImage = mlkit.InputImage.fromFile(imageFile);
-      final List<mlkit.Barcode> barcodes = await barcodeScanner.processImage(inputImage);
-      
-      if (barcodes.isEmpty) {
-        _error = "Fotoğrafta barkod bulunamadı.";
-        HapticFeedback.vibrate(); 
-      } else {
-        _error = null;
-        final newResults = <QrLookupResultWithCount>[];
-        final List<QrLookupResult> tempLastResults = [];
-
-        for (final barcode in barcodes) {
-          final qr = await _valueToQrResult(barcode.rawValue ?? "", barcode.boundingBox);
-          tempLastResults.add(qr);
-          newResults.add(QrLookupResultWithCount(qr: qr, createdAt: DateTime.now().toUtc(), isOffline: true));
-        }
-
-        _lastResults = List.from(tempLastResults);
-        _appendToHistory(newResults);
-        await _saveResults();
-      }
-      await barcodeScanner.close();
-    } catch (e) {
-      _error = 'Hata: $e';
-    } finally {
-      notifyListeners();
-    }
+  // Stok sayım sonuçlarını hesaplayıp Excel raporu olarak paylaşır
+  Future<void> exportComparisonReport() async {
+    await ExcelService.instance.shareComparisonReport(await getComparisonResults());
   }
 
   Future<QrLookupResult> _valueToQrResult(String v, Rect rect) async {
     String originalV = v;
-    v = v.replaceAll(String.fromCharCode(29), ' ');
-    List<String> segments = v.split(' ').where((s) => s.isNotEmpty).toList();
+    final parsed = Gs1Parser.parse(v);
 
-    String? drugName, gtin, serial, batch;
-    DateTime? expiry;
-
-    for (String segment in segments) {
-      processSegment(segment, (g, s, b, e) {
-        if (g != null) gtin = g;
-        if (s != null) serial = s;
-        if (b != null) batch = b;
-        if (e != null) expiry = e;
-      });
-    }
+    String? drugName;
+    final gtin = parsed.gtin;
+    final serial = parsed.serialNo;
+    final batch = parsed.batchNo;
+    final expiry = parsed.expiryDate;
 
     if (gtin != null) {
-      final drugFromLib = await _localDbService.findDrugByBarcode(gtin!);
+      final drugFromLib = await _localDbService.findDrugByBarcode(gtin);
       if (drugFromLib != null) {
         drugName = (drugFromLib['ÜRÜN ADI'] ?? drugFromLib['URUN_ADI'])?.toString();
       }
     }
 
-    final row = await DBHelper.getByValue(originalV);
-    if (drugName == null && row != null) drugName = "Kayıtlı Test İlacı";
-
     final bool isFound = drugName != null;
     final qrData = QrData(
-      gtin: gtin ?? (row != null ? row['gtin']?.toString() : null),
-      serialNo: serial ?? (row != null ? row['serial_no']?.toString() : null),
-      batchNo: batch ?? (row != null ? row['batch_no']?.toString() : null),
-      expiryDate: expiry ?? (row != null && row['expiry_date'] != null ? DateTime.tryParse(row['expiry_date'].toString()) : null),
+      gtin: gtin,
+      serialNo: serial,
+      batchNo: batch,
+      expiryDate: expiry,
       productName: drugName,
     );
 
@@ -1138,89 +605,15 @@ class QrScanViewModel extends ChangeNotifier {
     );
   }
 
-  void processSegment(String s, Function(String?, String?, String?, DateTime?) onFound) {
-    // 1. Temizleme: Görünmez GS (ASCII 29) karakterlerini belirgin bir ayırıcıya (|) çeviriyoruz
-    // Bazı tarayıcılar bunu boşluk olarak da verebilir.
-    String work = s.replaceAll('\x1D', '|').trim();
-
-    while (work.length >= 2) {
-      if (work.startsWith('01') && work.length >= 16) {
-        // --- GTIN (Sabit 14 Hane) ---
-        String gtinPart = work.substring(2, 16);
-        String cleanGtin = gtinPart.startsWith('0') ? gtinPart.substring(1) : gtinPart;
-        onFound(cleanGtin, null, null, null);
-        work = work.substring(16);
-      } 
-      else if (work.startsWith('17') && work.length >= 8) {
-        // --- SKT (Sabit 6 Hane: YYMMDD) ---
-        String datePart = work.substring(2, 8);
-        try {
-          int yy = int.parse(datePart.substring(0, 2));
-          int mm = int.parse(datePart.substring(2, 4));
-          int dd = int.parse(datePart.substring(4, 6));
-          if (mm >= 1 && mm <= 12) {
-            onFound(null, null, null, DateTime(2000 + yy, mm, dd == 0 ? 1 : dd));
-          }
-        } catch (_) {}
-        work = work.substring(8);
-      } 
-      else if (work.startsWith('21')) {
-        // --- SERİ NO (Değişken Uzunluk - Max 20) ---
-        work = work.substring(2);
-        // Ayırıcıya kadar veya diğer AI (17 veya 10) başlangıcına kadar oku
-        int end = _findVariableEnd(work);
-        String sn = work.substring(0, end).replaceAll('|', '');
-        onFound(null, sn, null, null);
-        work = work.substring(end);
-      } 
-      else if (work.startsWith('10')) {
-        // --- LOT / PARTİ NO (Değişken Uzunluk - Max 20) ---
-        work = work.substring(2);
-        int end = _findVariableEnd(work);
-        String lot = work.substring(0, end).replaceAll('|', '');
-        onFound(null, null, lot, null);
-        work = work.substring(end);
-      } 
-      else {
-        // Tanınmayan bir karakter varsa bir adım atla
-        work = work.substring(1);
-      }
-    }
-  }
-
-  // Değişken uzunluklu alanların (21 ve 10) nerede bittiğini bulan yardımcı fonksiyon
-  int _findVariableEnd(String s) {
-    // 1. Eğer içinde ayırıcı (| veya ASCII 29) varsa oraya kadar al
-    int sepIndex = s.indexOf('|');
-
-    // 2. Ayırıcı yoksa yalnızca 17 (SKT) AI'ını ara — seri no'dan sonra gelen sabit alan.
-    // next10 araması yapılmıyor: AI 10 (parti no) karekodun son alanıdır ve
-    // "10" alt dizisi parti no değerinin içinde geçebileceğinden yanlış bölünmeye yol açar.
-    int next17 = s.indexOf('17');
-
-    List<int> indexes = [];
-    if (sepIndex != -1) indexes.add(sepIndex);
-    if (next17 != -1 && next17 > 3) indexes.add(next17); // En az 3 karakter SN olmalı
-
-    if (indexes.isEmpty) return s.length; // Hiçbir şey yoksa sonuna kadar al
-
-    // Bulunan en yakın kesme noktasını döndür
-    return indexes.reduce((curr, next) => curr < next ? curr : next);
-  }
-
   String _getGtinFromRaw(String raw) {
-    String foundGtin = raw; // Bulamazsa ham hali kalsın
-    processSegment(raw, (gtin, sn, lot, date) {
-      if (gtin != null) {
-        foundGtin = gtin;
-      }
-    });
-    return foundGtin;
+    return Gs1Parser.parse(raw).gtin ?? raw;
   }
 
-  void _appendToHistory(List<QrLookupResultWithCount> entries) {
+  // Yeni kayıtları ekrandaki listeye ekler ve veritabanına yazar
+  Future<void> _appendToHistory(List<QrLookupResultWithCount> entries) async {
     _history.addAll(entries);
     notifyListeners();
+    await _persistHistory((userId) => _historyRepository.insertAll(userId, entries));
   }
 
   List<QrLookupResultWithCount> aggregate(List<QrLookupResultWithCount> items) {
@@ -1251,165 +644,39 @@ class QrScanViewModel extends ChangeNotifier {
     return filtered;
   }
 
-  void removeQrResultByValue(String value) { _history.removeWhere((h) => h.qr.value == value); notifyListeners(); _saveResults(); }
-  void removeHistoryItem(QrLookupResultWithCount item) { _history.remove(item); notifyListeners(); _saveResults(); }
-  void removeByProductName(String productName) { _history.removeWhere((h) => h.qr.data?.productName == productName); notifyListeners(); _saveResults(); }
+  void removeQrResultByValue(String value) { _history.removeWhere((h) => h.qr.value == value); notifyListeners(); _persistHistory((userId) => _historyRepository.deleteByValue(userId, value)); }
+  void removeByProductName(String productName) { _history.removeWhere((h) => h.qr.data?.productName == productName); notifyListeners(); _persistHistory((userId) => _historyRepository.deleteByProductName(userId, productName)); }
 
-  void incrementQrCountByValue(String value) {
-    if (_history.isEmpty) return;
-    QrLookupResultWithCount? rep;
-    for (final h in _history.reversed) { if (h.qr.value == value) { rep = h; break; } }
-    if (rep == null) return;
-    _appendToHistory([QrLookupResultWithCount(qr: rep.qr, createdAt: DateTime.now().toUtc(), count: 1)]);
-    _saveResults();
-  }
+  // Bulunan kayıtları seçilen türe göre süzüp Excel olarak paylaşır, aktarılacak kayıt yoksa false döner
+  Future<bool> exportFoundToExcel({String type = 'all'}) async {
+    final now = DateTime.now();
+    var rawList = lookupResults.where((item) => item.qr.found).toList();
 
-  void decrementQrCountByValue(String value) {
-    for (int i = _history.length - 1; i >= 0; i--) {
-      if (_history[i].qr.value == value) { _history.removeAt(i); notifyListeners(); _saveResults(); return; }
+    if (type == 'return') {
+      rawList = rawList.where((item) {
+        final date = item.qr.data?.expiryDate;
+        if (date == null) return false;
+        if (item.qr.data!.isExpired) return false;
+        return date.difference(now).inDays <= 90;
+      }).toList();
+    } else if (type == 'expired') {
+      rawList = rawList.where((item) => item.qr.data?.isExpired ?? false).toList();
     }
+
+    if (rawList.isEmpty) return false;
+
+    rawList.sort((a, b) {
+      String nameA = (a.qr.data?.productName ?? "").toLowerCase();
+      String nameB = (b.qr.data?.productName ?? "").toLowerCase();
+      return nameA.compareTo(nameB);
+    });
+
+    await ExcelService.instance.shareInventoryList(rawList, type: type);
+    return true;
   }
 
-  Map<String, int> get typeSummary {
-    int bulunan = _history.where((e) => e.qr.found).length;
-    int bulunamayan = _history.where((e) => !e.qr.found).length;
-    return { 'Bulunan': bulunan, 'Bulunamayan': bulunamayan, 'Toplam': _history.length };
-  }
-
-  Future<void> exportFoundToExcel(BuildContext context, {String type = 'all'}) async {
-    try {
-      final now = DateTime.now();
-      
-      // 1. Filtreleme: Bulunan ürünleri al
-      var rawList = lookupResults.where((item) => item.qr.found).toList();
-
-      if (type == 'return') {
-        rawList = rawList.where((item) {
-          final date = item.qr.data?.expiryDate;
-          if (date == null) return false;
-          if (item.qr.data!.isExpired) return false;
-          return date.difference(now).inDays <= 90;
-        }).toList();
-      } else if (type == 'expired') {
-        rawList = rawList.where((item) => item.qr.data?.isExpired ?? false).toList();
-      }
-
-      if (rawList.isEmpty) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(type == 'expired' ? "Miadı geçmiş ürün bulunamadı." : "Dışa aktarılacak kayıt bulunamadı."))
-          );
-        }
-        return;
-      }
-
-      // 2. Sıralama: İlaç adına göre alfabetik (Flat list)
-      rawList.sort((a, b) {
-        String nameA = (a.qr.data?.productName ?? "").toLowerCase();
-        String nameB = (b.qr.data?.productName ?? "").toLowerCase();
-        return nameA.compareTo(nameB);
-      });
-
-      // 3. Excel Oluşturma
-      var excel = Excel.createExcel();
-      String sheetName = "Envanter Listesi";
-      
-      // Varsayılan sayfayı isimlendir
-      var defaultSheet = excel.getDefaultSheet();
-      if (defaultSheet != null) {
-        excel.rename(defaultSheet, sheetName);
-      }
-      Sheet sheet = excel[sheetName];
-
-      CellStyle headerStyle = CellStyle(
-        backgroundColorHex: ExcelColor.fromHexString("#CCCCCC"),
-        bold: true,
-        horizontalAlign: HorizontalAlign.Center,
-        fontColorHex: ExcelColor.fromHexString("#000000"),
-      );
-
-      // ✅ 5 SÜTUNLU BAŞLIKLAR (Her Karekod Ayrı Satır)
-      List<String> headers = ["BARKOD", "İLAÇ ADI", "S.K.T", "PARTİ NO", "KAREKOD"];
-      for (int i = 0; i < headers.length; i++) {
-        var cell = sheet.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
-        cell.value = TextCellValue(headers[i]);
-        cell.cellStyle = headerStyle;
-      }
-
-      // 4. Verileri Yazma
-      for (int i = 0; i < rawList.length; i++) {
-        final item = rawList[i];
-        final qrData = item.qr.data;
-        final rowIndex = i + 1;
-
-        bool isExpired = qrData?.isExpired ?? false;
-        bool isNearExpiry = false;
-        if (!isExpired && qrData?.expiryDate != null) {
-          if (qrData!.expiryDate!.difference(now).inDays <= 90) isNearExpiry = true;
-        }
-
-        String formattedDate = qrData?.expiryDate != null 
-            ? "${qrData!.expiryDate!.day.toString().padLeft(2, '0')}.${qrData.expiryDate!.month.toString().padLeft(2, '0')}.${qrData.expiryDate!.year}" 
-            : "-";
-
-        CellStyle rowStyle = CellStyle(
-          backgroundColorHex: isExpired
-              ? ExcelColor.fromHexString("#FFCDD2") 
-              : isNearExpiry
-                  ? ExcelColor.fromHexString("#FFEB3B") 
-                  : ExcelColor.fromHexString("#FFFFFF"),
-        );
-
-        // Satır Verileri (Her item tek başına yazılır)
-        List<String> rowData = [
-          qrData?.gtin ?? "-",
-          qrData?.productName ?? "-",
-          formattedDate,
-          qrData?.batchNo ?? "-",
-          item.qr.value, 
-        ];
-
-        for (int j = 0; j < rowData.length; j++) {
-          var cell = sheet.cell(CellIndex.indexByColumnRow(columnIndex: j, rowIndex: rowIndex));
-          cell.value = TextCellValue(rowData[j]);
-          cell.cellStyle = rowStyle;
-        }
-      }
-
-      // 5. Kaydetme İşlemi
-      final directory = await getTemporaryDirectory();
-      String baseFileName = "envanter_listesi";
-      if (type == 'return') baseFileName = "DepoIadelistesi";
-      if (type == 'expired') baseFileName = "miadi_gecenler_listesi";
-      
-      final String fullFileName = "${baseFileName}_${DateTime.now().millisecondsSinceEpoch}.xlsx";
-      final String path = "${directory.path}/$fullFileName";
-      
-      final fileBytes = excel.save();
-      if (fileBytes != null) {
-        final file = File(path);
-        await file.writeAsBytes(fileBytes);
-
-        // 6. Kritik Paylaşım Ayarları (Dosyayı Excel olarak tanıtır)
-        await Share.shareXFiles(
-          [
-            XFile(
-              path, 
-              name: fullFileName, // Uzantının .xlsx olduğunu zorla belirtiyoruz
-              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            )
-          ],
-          text: 'Eczane Envanter Listesi',
-        );
-      }
-    } catch (e) {
-      debugPrint("Excel Hatası: $e");
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Hata: $e")));
-      }
-    }
-  }
-
+  // Abonelik özelliği aktif edileceği zaman kullanılacak
+  /*
   void _showSubscriptionDialog(BuildContext context) {
     const Color primaryColor = Color(0xFFB71C1C);
     const Color healthTeal = Color(0xFF00ADB5);
@@ -1546,10 +813,11 @@ class QrScanViewModel extends ChangeNotifier {
       ),
     );
   }
+  */
 
   @override
   void dispose() {
-    _clearTimer?.cancel();
+    _uiRefreshTimer?.cancel();
     _subscriptionTimer?.cancel(); 
     super.dispose();
   }

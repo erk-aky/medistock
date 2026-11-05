@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../core/constants/validation_constants.dart';
+import '../../core/services/its_credential_store.dart';
 import '../qr_scan/qr_scan_view_model.dart';
 import '../auth/auth_view_model.dart';
+import 'email_verification_page.dart';
 
 class AccountDetailsPage extends StatefulWidget {
   final QrScanViewModel vm;
@@ -79,24 +82,23 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
   }
 
   Future<void> _loadInitialData() async {
-    final prefs = await SharedPreferences.getInstance();
     final authVm = Provider.of<AuthViewModel>(context, listen: false);
+    final prefs = await SharedPreferences.getInstance();
     String userIdStr = authVm.userId?.toString() ?? "guest";
 
     final userNameKey = 'local_username_$userIdStr';
     final userEmailKey = 'local_email_$userIdStr';
-    final userGlnKey = 'local_gln_$userIdStr';
-    final userItsKey = 'local_its_password_$userIdStr';
 
     final savedUsername = prefs.getString(userNameKey);
     final savedEmail = prefs.getString(userEmailKey);
+    final itsCredentials = await ItsCredentialStore.instance.read(userIdStr);
 
     if (!mounted) return;
     setState(() {
-      _usernameController.text = savedUsername?.isNotEmpty == true ? savedUsername! : (authVm.username ?? "");
-      _emailController.text = savedEmail?.isNotEmpty == true ? savedEmail! : (authVm.email ?? "");
-      _glnController.text = prefs.getString(userGlnKey) ?? "";
-      _itsPasswordController.text = prefs.getString(userItsKey) ?? "";
+      _usernameController.text = authVm.username?.isNotEmpty == true ? authVm.username! : (savedUsername ?? "");
+      _emailController.text = authVm.email?.isNotEmpty == true ? authVm.email! : (savedEmail ?? "");
+      _glnController.text = itsCredentials.gln;
+      _itsPasswordController.text = itsCredentials.password;
       _pharmacyNameController.text = "Güneş Eczanesi (Örnek)";
     });
 
@@ -106,14 +108,22 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
 
   // 🔥 KRİTİK GÜNCELLEME BURADA
   Future<void> _handleUpdate() async {
-    if (_glnController.text.isNotEmpty && _glnController.text.length != 17) {
-      _showSnackBar("GLN numarası tam 17 hane olmalıdır!", Colors.orange);
+    _usernameController.text = _usernameController.text.trim();
+    _emailController.text = _emailController.text.trim();
+    final inputError = validateUsername(_usernameController.text) ?? validateEmail(_emailController.text);
+    if (inputError != null) {
+      _showSnackBar(inputError, Colors.orange);
+      return;
+    }
+
+    if (_glnController.text.isNotEmpty && _glnController.text.length != 13) {
+      _showSnackBar("GLN numarası tam 13 hane olmalıdır!", Colors.orange);
       return;
     }
 
     FocusScope.of(context).unfocus();
-    final prefs = await SharedPreferences.getInstance();
     final authVm = Provider.of<AuthViewModel>(context, listen: false);
+    final prefs = await SharedPreferences.getInstance();
 
     final userIdStr = authVm.userId?.toString() ?? "guest";
     
@@ -123,33 +133,41 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
     });
 
     try {
-      // 1. Önce SharedPreferences'a kaydet ve 'await' ile bittiğinden emin ol
-      await prefs.setString('local_username_$userIdStr', _usernameController.text);
-      await prefs.setString('local_email_$userIdStr', _emailController.text);
-      await prefs.setString('local_gln_$userIdStr', _glnController.text);
-      await prefs.setString('local_its_password_$userIdStr', _itsPasswordController.text);
+      await ItsCredentialStore.instance.save(userIdStr, gln: _glnController.text, password: _itsPasswordController.text);
 
-      print("✅ Yerel veriler kaydedildi: ${_usernameController.text}");
+      final newUsername = _usernameController.text;
+      final newEmail = _emailController.text.toLowerCase();
 
-      // 2. DB Güncelleme İsteği
-      final success = await authVm.updateUserInfo(
-        newUsername: _usernameController.text,
-        newEmail: _emailController.text,
-      );
-
-      if (success && mounted) {
-        // 3. ViewModel içindeki username'i manuel güncelle (404 hatasını önlemek için)
-        // Eğer AuthViewModel içinde set metodu yoksa authVm.fetchAndUpdateProfile doğrudan çağrılır
-        
-        print("🚀 İstek atılıyor: ${_usernameController.text}");
-        
-        // Backend'den güncel veriyi çek
-        await authVm.fetchAndUpdateProfile(_usernameController.text);
-        
-        _showSnackBar("Tüm bilgileriniz başarıyla güncellendi!", Colors.green);
-      } else if (mounted && authVm.error != null) {
-        _showSnackBar(authVm.error!, Colors.redAccent);
+      if (newUsername != (authVm.username ?? "")) {
+        if (!await authVm.updateUsername(newUsername)) {
+          if (mounted) _showSnackBar(authVm.error ?? "Kullanıcı adı güncellenemedi.", Colors.redAccent);
+          return;
+        }
+        await prefs.setString('local_username_$userIdStr', newUsername);
       }
+
+      if (newEmail != (authVm.email ?? "").toLowerCase()) {
+        if (!await authVm.requestEmailChange(newEmail)) {
+          _emailController.text = authVm.email ?? "";
+          if (mounted) _showSnackBar(authVm.error ?? "Onay kodu gönderilemedi.", Colors.redAccent);
+          return;
+        }
+        if (!mounted) return;
+
+        final verified = await Navigator.push<bool>(
+          context,
+          MaterialPageRoute(builder: (_) => EmailVerificationPage(newEmail: newEmail)),
+        );
+        if (verified != true) {
+          _emailController.text = authVm.email ?? "";
+          if (mounted) _showSnackBar("E-posta doğrulanmadığı için eski adresiniz geçerli.", Colors.orange);
+          return;
+        }
+        await prefs.setString('local_email_$userIdStr', newEmail);
+      }
+
+      await authVm.fetchAndUpdateProfile();
+      if (mounted) _showSnackBar("Tüm bilgileriniz başarıyla güncellendi!", Colors.green);
     } catch (e) {
       print("❌ HATA: $e");
       _showSnackBar("İşlem sırasında bir hata oluştu.", Colors.redAccent);
@@ -244,6 +262,7 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
                     label: "Kullanıcı Adı",
                     icon: Icons.alternate_email_rounded,
                     hint: "Kullanıcı adınızı seçin",
+                    formatters: [UsernameSpaceFormatter()],
                   ),
                   const SizedBox(height: 20),
                   _buildField(
@@ -259,11 +278,11 @@ class _AccountDetailsPageState extends State<AccountDetailsPage> {
                     controller: _glnController,
                     label: "GLN Numarası",
                     icon: Icons.numbers_rounded,
-                    hint: "17 Haneli GLN giriniz",
+                    hint: "13 Haneli GLN giriniz",
                     keyboardType: TextInputType.number,
                     formatters: [
                       FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(17),
+                      LengthLimitingTextInputFormatter(13),
                     ],
                   ),
                   const SizedBox(height: 20),

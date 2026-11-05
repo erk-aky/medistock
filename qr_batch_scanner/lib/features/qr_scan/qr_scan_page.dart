@@ -1,21 +1,32 @@
-import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mobile_scanner/mobile_scanner.dart'; 
 import 'qr_scan_view_model.dart';
 import 'qr_type_stats_page.dart'; 
+import '../../core/gs1/gs1_parser.dart';
 import '../../core/models/qr_lookup_result.dart';
+import '../../core/services/its_credential_store.dart';
+import '../../core/services/its_status_service.dart';
 import 'package:flutter/services.dart';
 import '../../core/subscription/subscription_page.dart';
+// Abonelik özelliği aktif edileceği zaman kullanılacak
+// import '../../core/subscription/trial_period_dialog.dart';
 import 'stock_comparison_page.dart';
+import 'widgets/confirm_dialog.dart';
+import 'widgets/export_options_sheet.dart';
+import 'widgets/its_result_dialog.dart';
+import 'widgets/live_barcode_painter.dart';
+import 'widgets/result_card.dart';
+import 'widgets/scan_filter_bar.dart';
 import '../settings/settings_page.dart';
-import '../settings/account_details_page.dart'; // Dosyanın gerçek yolunu yazmalısın
+import '../settings/account_details_page.dart';
 import '../auth/auth_view_model.dart';
 
 
-enum TimeFilterPreset { all, last1Hour, today, yesterday }
+// Kamera tarama rengi modu: sırasıyla normal -> invert -> hybrid -> normal
+// şeklinde döngüye giriyor (mod değiştirme butonu ile).
+enum _ScanColorMode { normal, inverted, hybrid }
 
 class QrScanPage extends StatelessWidget {
   const QrScanPage({super.key});
@@ -40,32 +51,94 @@ class _QrScanViewState extends State<_QrScanView> {
   final ScrollController _scrollController = ScrollController();
   late QrScanViewModel _vm;
   int _lastCount = 0;
-  TimeFilterPreset _selectedFilter = TimeFilterPreset.all;
   bool _isFlashOn = false; // Flaşın açık olup olmadığını biz takip edeceğiz
-  final FocusNode _searchFocusNode = FocusNode();
 
-  // class _QrScanPageState extends State<QrScanPage> {  satırının hemen altına:
-  // Sınıfın en üstünde, diğer değişkenlerin yanında:
   late MobileScannerController scannerController;
-  bool _isInvertedMode = false; 
-  bool _isCameraRefreshing = false; // BU SATIRI EKLE (Sayfayı yenilemek için kullanacağız)
+  _ScanColorMode _colorMode = _ScanColorMode.normal;
+  bool _isCameraRefreshing = false;
 
   void _initScanner() {
-    // Eğer hali hazırda bir controller varsa temizlik yapıyoruz
-    // scannerController?.dispose(); 
-
     scannerController = MobileScannerController(
       detectionSpeed: DetectionSpeed.unrestricted,
       cameraResolution: const Size(1920, 1080),
       detectionTimeoutMs: 100,
       // ÖNEMLİ: Siyah/Mavi kutular için en hızlısı DataMatrix'e odaklanmaktır.
       // Eğer diğer modlarda QR okutman gerekiyorsa [BarcodeFormat.dataMatrix, BarcodeFormat.qrCode] yapabilirsin.
-      formats: [BarcodeFormat.dataMatrix, BarcodeFormat.qrCode], 
+      formats: [BarcodeFormat.dataMatrix, BarcodeFormat.qrCode],
       facing: CameraFacing.back,
       returnImage: false,
       // İşte o sihirli özellik:
-      invertImage: _isInvertedMode, 
+      invertImage: _colorMode == _ScanColorMode.inverted,
+      // Hibrit modda kamera yeniden başlatılmadan her karede normal/ters
+      // tarama alterne edilir (native tarafta uygulanan yama, bkz. packages/mobile_scanner).
+      hybridMode: _colorMode == _ScanColorMode.hybrid,
     );
+
+    // mobile_scanner, ekran yön kilidinden (SystemChrome.setPreferredOrientations)
+    // BAĞIMSIZ olarak telefonun ham sensöründen (OrientationEventListener) okuduğu
+    // yönü kullanıyor. Yani ekran dikeyde kilitli olsa bile, telefon 45 dereceden
+    // fazla döndürülünce controller "landscape" sanıp önizlemeyi yanlış eksende
+    // çiziyordu. Bunu telefonun fiziksel açısından tamamen bağımsız hale getirmek
+    // için controller'ın raporladığı yönü sürekli portraitUp'a sabitliyoruz.
+    scannerController.addListener(_lockScannerToPortrait);
+  }
+
+  // Mod değiştirme butonunun görseli: normal (düz gri), invert (düz turuncu)
+  // ve hybrid (dikeyden ikiye bölünmüş, yarısı gri yarısı turuncu) durumlarını
+  // ayırt eder. ClipOval + Row kullanımı statik bir çizim olduğundan
+  // (animasyon yok) ekstra bir CustomPainter'a gerek bırakmaz.
+  Widget _buildColorModeAvatar(_ScanColorMode mode) {
+    const double size = 50;
+    Widget background;
+    switch (mode) {
+      case _ScanColorMode.normal:
+        background = Container(color: Colors.black54);
+      case _ScanColorMode.inverted:
+        background = Container(color: Colors.orangeAccent);
+      case _ScanColorMode.hybrid:
+        background = const Row(
+          children: [
+            Expanded(child: ColoredBox(color: Colors.black54)),
+            Expanded(child: ColoredBox(color: Colors.orangeAccent)),
+          ],
+        );
+    }
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          ClipOval(child: background),
+          Icon(
+            mode == _ScanColorMode.normal
+                ? Icons.brightness_6_outlined
+                : Icons.brightness_6,
+            color: Colors.white,
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _colorModeHintText(_ScanColorMode mode) {
+    switch (mode) {
+      case _ScanColorMode.normal:
+        return "Beyaz zemindeki karekodu okutun.";
+      case _ScanColorMode.inverted:
+        return "Siyah zemindeki karekodu okutun.";
+      case _ScanColorMode.hybrid:
+        return "Siyah veya beyaz zemindeki karekodu okutun.";
+    }
+  }
+
+  void _lockScannerToPortrait() {
+    if (scannerController.value.deviceOrientation != DeviceOrientation.portraitUp) {
+      scannerController.value = scannerController.value.copyWith(
+        deviceOrientation: DeviceOrientation.portraitUp,
+      );
+    }
   }
 
 
@@ -76,8 +149,7 @@ class _QrScanViewState extends State<_QrScanView> {
     
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _vm = context.read<QrScanViewModel>();
-      
-      // ignore: unused_element
+
       /* ---------------------------------------------------------
       // ABONELİK VE DENEME SÜRESİ KONTROL MANTIĞI (DEVRE DIŞI BIRAKILDI)
       // İleride tekrar aktif etmek isterseniz bu bloğu ve alttaki listener'ı açın.
@@ -97,7 +169,7 @@ class _QrScanViewState extends State<_QrScanView> {
         // --- 1. AŞAMA: GİRİŞ BİLGİSİ ---
         if (status.isNotEmpty && status != "Deneme Süresi Doldu" && !_infoDialogShownThisSession) {
           _infoDialogShownThisSession = true;
-          _showTrialPeriodDialog(status);
+          showTrialPeriodDialog(context, status);
           return; 
         }
 
@@ -106,7 +178,7 @@ class _QrScanViewState extends State<_QrScanView> {
           if (Navigator.canPop(context)) {
             Navigator.of(context).pop(); 
           }
-          _showTrialPeriodDialog(status);
+          showTrialPeriodDialog(context, status);
           await prefs.setBool('hasShownExpiredForever', true);
           _vm.removeListener(autoCheckListener);
         } 
@@ -119,12 +191,6 @@ class _QrScanViewState extends State<_QrScanView> {
       --------------------------------------------------------- */
 
       // --- DİĞER DİNLEYİCİLERİN (Aktif Kalmalı) ---
-      _vm.onScanError = (msg) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-        }
-      };
-      
       _lastCount = _vm.history.length;
       _vm.addListener(_onVmChange);
       
@@ -133,131 +199,6 @@ class _QrScanViewState extends State<_QrScanView> {
       // autoCheckListener(); 
     });
   }
-
-  /* ---------------------------------------------------------
-  // KULLANILMAYAN DİYALOG METODU (YORUMA ALINDI)
-  void _showTrialPeriodDialog(String remainingTime) {
-    final bool isExpired = remainingTime == "Deneme Süresi Doldu";
-    const Color primaryColor = Color(0xFFB71C1C);
-    const Color healthTeal = Color(0xFF00ADB5);
-    const Color expiredRed = Color(0xFFD9534F);
-
-    showDialog(
-      context: context,
-      barrierDismissible: true, 
-      builder: (BuildContext context) {
-        return PopScope(
-          canPop: true,
-          child: Dialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-            backgroundColor: Colors.white,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(vertical: 25),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: isExpired 
-                            ? [expiredRed, expiredRed.withOpacity(0.8)]
-                            : [primaryColor, healthTeal],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        borderRadius: const BorderRadius.only(
-                          topLeft: Radius.circular(28),
-                          topRight: Radius.circular(28),
-                        ),
-                      ),
-                      child: Column(
-                        children: [
-                          Icon(
-                            isExpired ? Icons.lock_reset_rounded : Icons.auto_awesome_rounded,
-                            color: Colors.white,
-                            size: 50,
-                          ),
-                          const SizedBox(height: 10),
-                          Text(
-                            isExpired ? "Süreniz Doldu" : "Ücretsiz Deneme",
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-                      child: Column(
-                        children: [
-                          Text(
-                            isExpired
-                                ? "Deneme süreniz sona erdi. Profesyonel araçları kullanmaya devam etmek için aboneliğinizi başlatın."
-                                : "Şu an ücretsiz deneme sürümünü kullanıyorsunuz. Tüm özelliklere tam erişiminiz var.",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.blueGrey.shade700, fontSize: 15, height: 1.4),
-                          ),
-                          const SizedBox(height: 20),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                            decoration: BoxDecoration(
-                              color: isExpired ? expiredRed.withOpacity(0.1) : healthTeal.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(15),
-                              border: Border.all(
-                                color: isExpired ? expiredRed.withOpacity(0.3) : healthTeal.withOpacity(0.3)
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.timer_outlined, size: 18, color: isExpired ? expiredRed : healthTeal),
-                                const SizedBox(width: 8),
-                                const Text("Kalan Durum: ", style: TextStyle(fontWeight: FontWeight.w600)),
-                                Text(remainingTime, style: TextStyle(color: isExpired ? expiredRed : healthTeal, fontWeight: FontWeight.bold)),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 25),
-                          ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: isExpired ? primaryColor : healthTeal,
-                              foregroundColor: Colors.white,
-                              minimumSize: const Size(double.infinity, 52),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                            ),
-                            onPressed: () {
-                              Navigator.pop(context);
-                              // Navigator.push(...)
-                            },
-                            child: const Text("Planları İncele / Abone Ol"),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: IconButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close_rounded, color: Colors.white70, size: 28),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-  --------------------------------------------------------- */
 
   void _onVmChange() {
     final currentCount = _vm.history.length;
@@ -273,13 +214,6 @@ class _QrScanViewState extends State<_QrScanView> {
       });
     }
     _lastCount = currentCount;
-  }
-
-  Future<ui.Image> _getImageInfo(File file) async {
-    final bytes = await file.readAsBytes();
-    final ui.Codec codec = await ui.instantiateImageCodec(bytes);
-    final ui.FrameInfo frameInfo = await codec.getNextFrame();
-    return frameInfo.image;
   }
 
  @override
@@ -302,27 +236,15 @@ class _QrScanViewState extends State<_QrScanView> {
 
 
 
-  bool _matchesFilter(DateTime createdAt, TimeFilterPreset preset) {
-    final now = DateTime.now();
-    switch (preset) {
-      case TimeFilterPreset.all: return true;
-      case TimeFilterPreset.last1Hour: return createdAt.isAfter(now.subtract(const Duration(hours: 1)));
-      case TimeFilterPreset.today:
-        return createdAt.year == now.year && createdAt.month == now.month && createdAt.day == now.day;
-      case TimeFilterPreset.yesterday:
-        final yesterday = now.subtract(const Duration(days: 1));
-        return createdAt.year == yesterday.year && createdAt.month == yesterday.month && createdAt.day == yesterday.day;
-    }
-  }
-
   Future<bool?> _openLiveScanner({String mode = 'normal'}) async {
-    // 1. Ekran yön kilidini serbest bırak
+    // Kamera ekranını dikeyde kilitli tut: telefon 45 derecenin üzerinde
+    // döndüğünde mobile_scanner yön hesaplaması bozulup görüntüyü yanlış
+    // eksende (yatayı dikeymiş gibi) basıyor. Dönüşe izin vermeyerek
+    // bu hesaplamanın hiç tetiklenmesini engelliyoruz.
     await SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
-      DeviceOrientation.portraitDown,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
     ]);
+    if (!mounted) return null;
 
     // Yeni bir tarama oturumu başlat (Eski çizimleri temizle)
     _vm.clearCurrentSession();
@@ -367,7 +289,7 @@ class _QrScanViewState extends State<_QrScanView> {
                     // --- 1. KAMERA KATMANI ---
                     if (!isCameraRefreshing)
                       MobileScanner(
-                        key: ValueKey('scanner_${_isInvertedMode}_${scannerController.hashCode}'),
+                        key: ValueKey('scanner_${_colorMode}_${scannerController.hashCode}'),
                         fit: BoxFit.fitHeight,
                         controller: scannerController,
                       placeholderBuilder: (context) => Container(color: Colors.black),
@@ -382,15 +304,14 @@ class _QrScanViewState extends State<_QrScanView> {
                             final String? rawValue = capture.barcodes.first.rawValue;
                             if (rawValue != null) {
                               hasScannedIts = true;
-                              String? gtin, sn, lot; DateTime? skt;
-                              _vm.processSegment(rawValue, (g, s, l, d) {
-                                if (g != null) gtin = g;
-                                if (s != null) sn = s;
-                                if (l != null) lot = l;
-                                if (d != null) skt = d;
-                              });
-                              final String? ucKodu = await _vm.checkDrugStatusWithIts(
-                                context: context,
+                              final parsed = Gs1Parser.parse(rawValue);
+                              final gtin = parsed.gtin;
+                              final sn = parsed.serialNo;
+                              final lot = parsed.batchNo;
+                              final skt = parsed.expiryDate;
+                              final userId = Provider.of<AuthViewModel>(context, listen: false).userId?.toString() ?? "guest";
+                              final String? ucKodu = await ItsStatusService.instance.checkDrugStatus(
+                                userId: userId,
                                 gtin: gtin ?? "",
                                 sn: sn ?? "",
                                 lot: lot ?? "",
@@ -398,9 +319,10 @@ class _QrScanViewState extends State<_QrScanView> {
                               );
                               if (context.mounted) {
                                 await scannerController.stop();
-                                Navigator.pop(context, true); 
-                                if (ucKodu != null) {
-                                  showItsDialog(context, _vm, ucKodu, "00000", gtin ?? "", sn ?? "");
+                                if (!context.mounted) return;
+                                Navigator.pop(context, true);
+                                if (ucKodu != null && mounted) {
+                                  showItsDialog(this.context, _vm, ucKodu, "00000", gtin ?? "", sn ?? "");
                                 }
                               }
                             }
@@ -475,7 +397,9 @@ class _QrScanViewState extends State<_QrScanView> {
                             isCameraRefreshing = true;
                           });
 
-                          _isInvertedMode = !_isInvertedMode; 
+                          // Döngü: normal -> invert -> hybrid -> normal ...
+                          _colorMode = _ScanColorMode.values[
+                              (_colorMode.index + 1) % _ScanColorMode.values.length];
 
                           // 2. Widget tree'nin güncellenip eski controller'ı dinleyen widget'ları sökmesi için çok kısa bir bekleme yapıyoruz. 
                           // Bu bekleme dispose() çağrısına bağlı 'kırmızı hata ekranını' kesinlikle çözecek.
@@ -502,11 +426,7 @@ class _QrScanViewState extends State<_QrScanView> {
                             });
                           }
                         },
-                        child: CircleAvatar(
-                          backgroundColor: _isInvertedMode ? Colors.orangeAccent : Colors.black54,
-                          radius: 25,
-                          child: Icon(_isInvertedMode ? Icons.brightness_6 : Icons.brightness_6_outlined, color: Colors.white),
-                        ),
+                        child: _buildColorModeAvatar(_colorMode),
                       ),
                     ),
 
@@ -573,7 +493,7 @@ class _QrScanViewState extends State<_QrScanView> {
                                       ? "Lütfen sorgulanacak ürünü kameraya gösterin."
                                       : (vm.isComparisonMode 
                                           ? "Kutuları okutun. Eşleşmeyenler kırmızı yanar." 
-                                          : "Karekodu kameraya gösterin.\n${_isInvertedMode ? "Siyah zemindeki karekodu okutun." : "Beyaz zemindeki karekodu okutun."}"),
+                                          : "Karekodu kameraya gösterin.\n${_colorModeHintText(_colorMode)}"),
                                   textAlign: TextAlign.center,
                                   style: const TextStyle(color: Colors.white, fontSize: 12), // ✅ biraz küçültüldü
                                 ),
@@ -640,8 +560,7 @@ class _QrScanViewState extends State<_QrScanView> {
   @override
   Widget build(BuildContext context) {
     final vm = context.watch<QrScanViewModel>();
-    final timeFilteredList = vm.history.where((r) => _matchesFilter(r.createdAt, _selectedFilter)).toList();
-    final filteredResults = _groupByProductName(vm.aggregate(timeFilteredList));
+    final filteredResults = vm.groupedResults;
 
     return Scaffold(
       resizeToAvoidBottomInset: false,
@@ -702,7 +621,7 @@ class _QrScanViewState extends State<_QrScanView> {
           // ✅ PAYLAŞ BUTONU
           _buildActionIcon(
             icon: Icons.share_rounded,
-            onPressed: () => _showExportOptions(context, vm), 
+            onPressed: () => showExportOptionsSheet(context, vm),
           ),
           // ✅ İSTATİSTİK BUTONU
           _buildActionIcon(
@@ -789,16 +708,24 @@ class _QrScanViewState extends State<_QrScanView> {
                       ),
                     ),
                   ),
-                _buildSearchRow(vm),
-                _buildTimeFilterBar(vm),
+                ScanSearchRow(onChanged: vm.updateSearchQuery),
+                ScanTimeFilterBar(
+                  selected: vm.timeFilter,
+                  onSelected: vm.setTimeFilter,
+                  hasItems: vm.history.isNotEmpty,
+                  onClearHistory: () => _showDeleteDialog(context, vm),
+                ),
                 Expanded(
                   child: filteredResults.isEmpty
-                      ? _buildEmptyState()
+                      ? const ScanEmptyState()
                       : ListView.builder(
                           controller: _scrollController,
                           padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
                           itemCount: filteredResults.length,
-                          itemBuilder: (context, index) => _buildResultCard(vm, filteredResults[index]),
+                          itemBuilder: (context, index) => ScanResultCard(
+                            item: filteredResults[index],
+                            onDelete: () => _showSingleDeleteConfirm(this.context, vm, filteredResults[index]),
+                          ),
                         ),
                 ),
               ],
@@ -810,8 +737,7 @@ class _QrScanViewState extends State<_QrScanView> {
   }
 
   Future<void> _handleItsCheck(BuildContext context, QrScanViewModel vm) async {
-    // 1️⃣ SharedPreferences ve AuthViewModel hazır olana kadar bekle
-    final prefs = await SharedPreferences.getInstance();
+    // 1️⃣ AuthViewModel hazır olana kadar bekle
     final authVm = Provider.of<AuthViewModel>(context, listen: false);
 
     // Eğer userId henüz null ise küçük bir gecikme ile tekrar dene
@@ -825,8 +751,9 @@ class _QrScanViewState extends State<_QrScanView> {
     final userIdStr = userId?.toString() ?? "guest";
 
     // 3️⃣ SharedPreferences’ten doğru key ile verileri alıyoruz
-    String gln = prefs.getString('local_gln_$userIdStr') ?? "";
-    String pass = prefs.getString('local_its_password_$userIdStr') ?? "";
+    final credentials = await ItsCredentialStore.instance.read(userIdStr);
+    String gln = credentials.gln;
+    String pass = credentials.password;
 
     debugPrint("🔍 [ITS-CHECK] Kontrol ediliyor - ID: $userIdStr, GLN: $gln, Pass: ${pass.isNotEmpty ? '******' : ''}");
 
@@ -875,168 +802,6 @@ class _QrScanViewState extends State<_QrScanView> {
     }
   }
 
-  void showItsDialog(BuildContext context, QrScanViewModel vm, String itsMessage, String uc, String gtin, String sn) {
-    // Başarı durumunu kontrol et (00000 başarılı, diğerleri genellikle hata/uyarıdır)
-    bool isSuccess = uc == '00000' || uc == '40001';
-    final Color statusBg = isSuccess ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE);
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // --- ÜST DURUM ÇUBUĞU ---
-              Container(
-                padding: const EdgeInsets.symmetric(vertical: 20),
-                decoration: BoxDecoration(
-                  color: statusBg,
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(20),
-                    topRight: Radius.circular(20),
-                  ),
-                ),
-                child: Center(
-                  child: Column(
-                    children: [
-                      Icon(
-                        isSuccess ? Icons.verified_user_rounded : Icons.gpp_bad_rounded,
-                        size: 50,
-                        color: const Color(0xFFB71C1C),
-                      ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        "İTS SORGULAMA",
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 1.2,
-                          color: Color(0xFFB71C1C),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  children: [
-                    // --- MESAJ KISMI (Backend'den gelen hazır mesaj) ---
-                    Text(
-                      itsMessage.toUpperCase(),
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFFB71C1C),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-
-                    // --- VERİ KUTUCUKLARI ---
-                    _buildInfoRow(Icons.qr_code_2_rounded, "GTIN", gtin),
-                    const SizedBox(height: 8),
-                    _buildInfoRow(Icons.pin_rounded, "S/N", sn),
-
-                    // --- IP ADRESİ (Sadece yetki hatasında gösterilir) ---
-                    if (itsMessage.contains("yetkilendirme") || uc == 'HATA_ERISIM') ...[
-                      const SizedBox(height: 15),
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.blueGrey.withOpacity(0.05),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.blueGrey.withOpacity(0.1)),
-                        ),
-                        child: FutureBuilder<String>(
-                          future: vm.getPublicIP(),
-                          builder: (context, snapshot) {
-                            return Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Icon(Icons.language_rounded, size: 16, color: Colors.blueGrey),
-                                const SizedBox(width: 8),
-                                Text(
-                                  "BAĞLANTI IP: ${snapshot.data ?? 'Sorgulanıyor...'}",
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    fontFamily: 'monospace',
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.blueGrey,
-                                  ),
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-
-                    const SizedBox(height: 25),
-
-                    // --- BUTON ---
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFB71C1C),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 15),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          elevation: 0,
-                        ),
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text(
-                          "ANLADIM",
-                          style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  // Bilgi satırlarını oluşturmak için yardımcı widget
-  Widget _buildInfoRow(IconData icon, String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFB),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.black.withOpacity(0.05)),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 18, color: const Color(0xFFB71C1C)),
-          const SizedBox(width: 10),
-          Text(
-            "$label:",
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              value,
-              textAlign: TextAlign.right,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   // ✅ KOYU MEDİKAL TEMALI DOSYA YÜKLEME PANELİ
   void _showFileUploadDialog(BuildContext context, QrScanViewModel vm) {
     showModalBottomSheet(
@@ -1074,7 +839,16 @@ class _QrScanViewState extends State<_QrScanView> {
               InkWell(
                 onTap: () async {
                   // 1. Önce dosyayı seçiyoruz (Panel hala açık kalsın ki context kopmasın)
-                  final loadedData = await vm.pickExcelFile(context); 
+                  Map<String, int>? loadedData;
+                  try {
+                    loadedData = await vm.pickExcelFile();
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text("Hata: $e"), backgroundColor: Colors.red),
+                      );
+                    }
+                  }
 
                   // 2. Dosya seçme işlemi (iptal veya seçim) bittikten sonra alt paneli kapat
                   if (context.mounted) {
@@ -1140,8 +914,6 @@ class _QrScanViewState extends State<_QrScanView> {
     );
   }
 
-  // Eski hali: void _showSummaryDialog(BuildContext context, int products, int quantity)
-  // GÜNCEL KOD:
   void _showSummaryDialog(BuildContext context, int products, int quantity, QrScanViewModel vm) {
     showDialog(
       context: context,
@@ -1273,58 +1045,6 @@ class _QrScanViewState extends State<_QrScanView> {
     );
   }
 
-  // ✅ SEÇİM MENÜSÜ FONKSİYONU (Bunu build metodunun dışına ekle)
-  void _showExportOptions(BuildContext context, QrScanViewModel vm) {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.all(20.0),
-                child: Text("Excel Olarak Paylaş", 
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-              ),
-              ListTile(
-                leading: const Icon(Icons.list_alt, color: Color(0xFFE53935)),
-                title: const Text("Tüm Liste"),
-                subtitle: const Text("Taranan tüm ilaçları içeren Excel dosyası"),
-                onTap: () {
-                  Navigator.pop(context);
-                  vm.exportFoundToExcel(context, type: 'all');
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.assignment_return, color: Colors.orange),
-                title: const Text("İade Listesi"),
-                subtitle: const Text("Miadı yaklaşan (90 gün) ilaçları içeren Excel dosyası"),
-                onTap: () {
-                  Navigator.pop(context);
-                  vm.exportFoundToExcel(context, type: 'return');
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.history_toggle_off_rounded, color: Colors.red),
-                title: const Text("Miadı Geçenler"),
-                subtitle: const Text("Sadece miadı geçmiş ürünleri içeren Excel dosyası"),
-                onTap: () {
-                  Navigator.pop(context);
-                  vm.exportFoundToExcel(context, type: 'expired');
-                },
-              ),
-              const SizedBox(height: 20),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
   Widget _buildActionIcon({required IconData icon, required VoidCallback onPressed, Color color = Colors.white}) {
     return IconButton(
       icon: Container(
@@ -1350,8 +1070,7 @@ class _QrScanViewState extends State<_QrScanView> {
         borderRadius: BorderRadius.circular(24),
         child: vm.isProcessing
             ? const Center(child: CircularProgressIndicator())
-            : vm.lastScannedFile == null
-                ? InkWell(
+            : InkWell(
                     onTap: () => _openLiveScanner(),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -1362,452 +1081,55 @@ class _QrScanViewState extends State<_QrScanView> {
                         const Text('Kamerayı açmak için dokunun', style: TextStyle(fontSize: 12, color: Colors.grey)),
                       ],
                     ),
-                  )
-                : InkWell(
-                    onTap: () => _openLiveScanner(),
-                    child: Stack(
-                      children: [
-                        Positioned.fill(
-                          child: Image.file(vm.lastScannedFile!, fit: BoxFit.contain),
-                        ),
-                        Container(color: Colors.black.withOpacity(0.05)),
-                        if (vm.lastResults.isNotEmpty)
-                          FutureBuilder<ui.Image>(
-                            future: _getImageInfo(vm.lastScannedFile!),
-                            builder: (context, snapshot) {
-                              if (!snapshot.hasData) return const SizedBox();
-                              return LayoutBuilder(
-                                builder: (context, constraints) => CustomPaint(
-                                  size: Size(constraints.maxWidth, constraints.maxHeight),
-                                  painter: QrBoxPainter(
-                                    results: vm.lastResults,
-                                    imageActualSize: Size(snapshot.data!.width.toDouble(), snapshot.data!.height.toDouble()),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        Positioned(
-                          bottom: 0, left: 0, right: 0,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 6),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.5),
-                            ),
-                            child: const Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.touch_app_rounded, color: Colors.white, size: 14),
-                                SizedBox(width: 6),
-                                Text(
-                                  'Yeniden taramak için dokunun',
-                                  style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w500),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
                   ),
       ),
     );
   }
 
-  Widget _buildSearchRow(QrScanViewModel vm) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      child: TextField(
-        focusNode: _searchFocusNode,
-        onChanged: vm.updateSearchQuery,
-        onTapOutside: (event) => _searchFocusNode.unfocus(),
-        style: const TextStyle(fontSize: 14),
-        decoration: InputDecoration(
-          hintText: 'İlaç adı, GTIN veya Seri No ara...',
-          prefixIcon: const Icon(Icons.search_rounded, color: const Color(0xFFE53935), size: 20),
-          filled: true,
-          fillColor: Colors.white,
-          contentPadding: const EdgeInsets.symmetric(vertical: 0),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide.none,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTimeFilterBar(QrScanViewModel vm) {
-    // 🎯 HATA ÇÖZÜMÜ: 
-    // Eğer ViewModel'inde 'history' adında bir getter varsa onu kullanır.
-    // Yoksa vm.aggregate(_history) mantığına hizmet eden listenin 
-    // dışarıya açık ismini buraya yazmalısın. 
-    // Genelde bu 'vm.history' veya 'vm.items' olur.
-    final bool hasItems = vm.history.isNotEmpty; 
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          // 1. Satır: Filtreler
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
-            child: Row(
-              children: [
-                _filterChip(vm, TimeFilterPreset.all, 'Tümü'),
-                _filterChip(vm, TimeFilterPreset.last1Hour, 'Son 1 Saat'),
-                _filterChip(vm, TimeFilterPreset.today, 'Bugün'),
-                _filterChip(vm, TimeFilterPreset.yesterday, 'Dün'),
-              ],
-            ),
-          ),
-          
-          // 2. Satır: Koşullu Temizle Butonu
-          if (hasItems) 
-            Padding(
-              padding: const EdgeInsets.only(top: 2, right: 4),
-              child: InkWell(
-                onTap: () => _showDeleteDialog(context, vm),
-                borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.delete_outline_rounded, 
-                        size: 14, 
-                        color: Colors.redAccent.withOpacity(0.7)
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        "Geçmişi Temizle",
-                        style: TextStyle(
-                          color: Colors.redAccent.withOpacity(0.7),
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            )
-          else
-            const SizedBox(height: 18), // Buton yokken kayma olmaması için
-        ],
-      ),
-    );
-  }
-
-  void _showSingleDeleteConfirm(BuildContext context, QrScanViewModel vm, QrLookupResultWithCount item) {
+  // Tek bir ürünü listeden silmeden önce onay ister
+  Future<void> _showSingleDeleteConfirm(BuildContext context, QrScanViewModel vm, QrLookupResultWithCount item) async {
     final String? productName = item.qr.data?.productName;
     final String displayName = productName != null
         ? productName.toUpperCase()
         : item.qr.value;
 
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        titlePadding: EdgeInsets.zero,
-        title: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: const BoxDecoration(
-            color: Color(0xFF1B262C),
-            borderRadius: BorderRadius.only(topLeft: Radius.circular(20), topRight: Radius.circular(20)),
-          ),
-          child: const Row(
-            children: [
-              Icon(Icons.delete_forever_rounded, color: Colors.white),
-              SizedBox(width: 12),
-              Text("Ürünü Sil", style: TextStyle(color: Colors.white, fontSize: 18)),
-            ],
-          ),
-        ),
-        content: Padding(
-          padding: const EdgeInsets.only(top: 16),
-          child: Text(
-            '"$displayName" listeden silinecek. Emin misiniz?',
-            style: const TextStyle(color: Color(0xFFB71C1C), fontWeight: FontWeight.w500),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("VAZGEÇ", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.redAccent,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            onPressed: () {
-              Navigator.pop(context);
-              if (productName != null) {
-                vm.removeByProductName(productName);
-              } else {
-                vm.removeQrResultByValue(item.qr.value);
-              }
-            },
-            child: const Text("EVET, SİL", style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: "Ürünü Sil",
+      icon: Icons.delete_forever_rounded,
+      message: '"$displayName" listeden silinecek. Emin misiniz?',
+      confirmLabel: "EVET, SİL",
     );
+    if (!confirmed) return;
+    if (productName != null) {
+      vm.removeByProductName(productName);
+    } else {
+      vm.removeQrResultByValue(item.qr.value);
+    }
   }
 
-  void _showDeleteDialog(BuildContext context, QrScanViewModel vm) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        titlePadding: EdgeInsets.zero,
-        title: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: const BoxDecoration(
-            color: Color(0xFF1B262C), // Uygulama ana rengi (Navy)
-            borderRadius: BorderRadius.only(topLeft: Radius.circular(20), topRight: Radius.circular(20)),
-          ),
-          child: const Row(
-            children: [
-              Icon(Icons.auto_delete_rounded, color: Colors.white),
-              SizedBox(width: 12),
-              Text("Geçmişi Temizle", style: TextStyle(color: Colors.white, fontSize: 18)),
-            ],
-          ),
-        ),
-        content: const Padding(
-          padding: EdgeInsets.only(top: 16),
-          child: Text(
-            "Tüm tarama geçmişiniz kalıcı olarak silinecektir. Bu işlemi onaylıyor musunuz?",
-            style: TextStyle(color: Color(0xFFB71C1C), fontWeight: FontWeight.w500),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("VAZGEÇ", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.redAccent,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            onPressed: () {
-              vm.clearAllHistory();
-              Navigator.pop(context);
-            },
-            child: const Text("EVET, SİL", style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
+  // Tüm tarama geçmişini silmeden önce onay ister
+  Future<void> _showDeleteDialog(BuildContext context, QrScanViewModel vm) async {
+    final confirmed = await showConfirmDialog(
+      context,
+      title: "Geçmişi Temizle",
+      icon: Icons.auto_delete_rounded,
+      message: "Tüm tarama geçmişiniz kalıcı olarak silinecektir. Bu işlemi onaylıyor musunuz?",
+      confirmLabel: "EVET, SİL",
     );
+    if (confirmed) vm.clearAllHistory();
   }
 
-
-  Widget _filterChip(QrScanViewModel vm, TimeFilterPreset preset, String label) {
-    final isSelected = _selectedFilter == preset;
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: ChoiceChip(
-        label: Text(label),
-        selected: isSelected,
-        onSelected: (val) { 
-          if (val) {
-            setState(() => _selectedFilter = preset);
-            final now = DateTime.now();
-            switch (preset) {
-              case TimeFilterPreset.all:
-                vm.setDateFilter(null, null);
-                break;
-              case TimeFilterPreset.last1Hour:
-                vm.setDateFilter(now.subtract(const Duration(hours: 1)), null);
-                break;
-              case TimeFilterPreset.today:
-                vm.setDateFilter(DateTime(now.year, now.month, now.day), null);
-                break;
-              case TimeFilterPreset.yesterday:
-                final yesterday = now.subtract(const Duration(days: 1));
-                vm.setDateFilter(
-                  DateTime(yesterday.year, yesterday.month, yesterday.day),
-                  DateTime(now.year, now.month, now.day),
-                );
-                break;
-            }
-          }
-        },
-        selectedColor: const Color(0xFFE53935),
-        backgroundColor: Colors.white,
-        labelStyle: TextStyle(
-          color: isSelected ? Colors.white : const Color(0xFFD32F2F),
-          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-          fontSize: 12,
-        ),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        side: BorderSide(color: isSelected ? Colors.transparent : const Color(0xFFFFCDD2)),
-      ),
+  // Bu oturumdaki tarama sayacını sıfırlamadan önce onay ister
+  Future<void> _showResetSessionDialog(BuildContext context, QrScanViewModel vm) async {
+    final confirmed = await showConfirmDialog(
+      context,
+      title: "Oturumu Sıfırla",
+      icon: Icons.restart_alt_rounded,
+      message: "Bu oturumdaki tüm taramaları silmek istediğinize emin misiniz?",
+      confirmLabel: "EVET, SİFIRLA",
     );
-  }
-
-  Widget _buildResultCard(QrScanViewModel vm, QrLookupResultWithCount item) {
-    final bool found = item.qr.found;
-    // final bool isExpired = item.qr.data?.isExpired ?? false;
-    // final bool expirySoon = item.qr.data?.isExpirySoon ?? false;
-    final String? productName = item.qr.data?.productName;
-    final String displayName = found && productName != null
-        ? productName.toUpperCase()
-        : item.qr.value;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 10, offset: const Offset(0, 4))],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: IntrinsicHeight(
-          child: Row(
-            children: [
-              // -- Sol renkli kenarlık (geçici olarak kapatıldı) --
-              // Container(width: 6, color: found ? Colors.teal : Colors.redAccent),
-              // const SizedBox(width: 12),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // -- Durum ve miad badge'leri (geçici olarak kapatıldı) --
-                      // Row(
-                      //   mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      //   children: [
-                      //     _buildStatusBadge(found),
-                      //     if (isExpired)
-                      //       _buildExpiredBadge()
-                      //     else if (expirySoon)
-                      //       _buildExpiryBadge(),
-                      //   ],
-                      // ),
-                      // const SizedBox(height: 12),
-                      Text(
-                        displayName,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black87,
-                        ),
-                      ),
-                      // -- GTIN / Seri No / SKT satırları (geçici olarak kapatıldı) --
-                      // if (found) ...[
-                      //   const SizedBox(height: 8),
-                      //   _buildMedicineInfo(Icons.qr_code_rounded, 'GTIN', item.qr.data!.gtin ?? '-'),
-                      //   _buildMedicineInfo(Icons.numbers_rounded, 'Seri No', item.qr.data!.serialNo ?? '-'),
-                      //   _buildMedicineInfo(Icons.calendar_today_rounded, 'SKT',
-                      //     item.qr.data!.expiryDate != null
-                      //       ? "${item.qr.data!.expiryDate!.day}/${item.qr.data!.expiryDate!.month}/${item.qr.data!.expiryDate!.year}"
-                      //       : '-'),
-                      // ],
-                    ],
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.only(right: 4),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFEBEE),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        '${item.count}\nadet',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: const Color(0xFFD32F2F),
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                          height: 1.3,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_sweep_rounded, color: Colors.grey),
-                      onPressed: () => _showSingleDeleteConfirm(context, vm, item),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showResetSessionDialog(BuildContext context, QrScanViewModel vm) {
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        titlePadding: EdgeInsets.zero,
-        title: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: const BoxDecoration(
-            color: Color(0xFF1B262C),
-            borderRadius: BorderRadius.only(
-              topLeft: Radius.circular(20),
-              topRight: Radius.circular(20),
-            ),
-          ),
-          child: const Row(
-            children: [
-              Icon(Icons.restart_alt_rounded, color: Colors.white),
-              SizedBox(width: 12),
-              Text("Oturumu Sıfırla", style: TextStyle(color: Colors.white, fontSize: 18)),
-            ],
-          ),
-        ),
-        content: const Padding(
-          padding: EdgeInsets.only(top: 16),
-          child: Text(
-            "Bu oturumdaki tüm taramaları silmek istediğinize emin misiniz?",
-            style: TextStyle(color: Color(0xFFB71C1C), fontWeight: FontWeight.w500),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text("VAZGEÇ", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.redAccent,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            onPressed: () {
-              vm.resetSessionCount();
-              Navigator.pop(dialogContext);
-            },
-            child: const Text("EVET, SİFIRLA", style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
+    if (confirmed) vm.resetSessionCount();
   }
 
   Widget _buildScanCounter(String label, int count) {
@@ -1833,231 +1155,4 @@ class _QrScanViewState extends State<_QrScanView> {
       ),
     );
   }
-
-  List<QrLookupResultWithCount> _groupByProductName(List<QrLookupResultWithCount> items) {
-    final Map<String, QrLookupResultWithCount> nameToGroup = {};
-    final List<QrLookupResultWithCount> result = [];
-
-    for (final item in items) {
-      if (!item.qr.found) {
-        result.add(item);
-        continue;
-      }
-      final name = item.qr.data?.productName;
-      if (name == null || name.isEmpty) {
-        result.add(item);
-        continue;
-      }
-      if (!nameToGroup.containsKey(name)) {
-        final grouped = QrLookupResultWithCount(
-          qr: item.qr,
-          createdAt: item.createdAt,
-          count: item.count,
-          isOffline: item.isOffline,
-        );
-        nameToGroup[name] = grouped;
-        result.add(grouped);
-      } else {
-        nameToGroup[name]!.count += item.count;
-      }
-    }
-
-    return result;
-  }
-
-  // ignore: unused_element
-  Widget _buildStatusBadge(bool found) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: found ? Colors.teal.shade50 : Colors.red.shade50,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        found ? 'Kayıtlı İlaç' : 'Kayıtsız Barkod',
-        style: TextStyle(color: found ? Colors.teal.shade700 : Colors.red.shade700, fontSize: 11, fontWeight: FontWeight.bold),
-      ),
-    );
-  }
-
-  // ignore: unused_element
-  Widget _buildExpiryBadge() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(color: Colors.orange.shade100, borderRadius: BorderRadius.circular(8)),
-      child: Text('MİADI YAKIN', style: TextStyle(color: Colors.orange.shade900, fontSize: 10, fontWeight: FontWeight.bold)),
-    );
-  }
-
-  // ignore: unused_element
-  Widget _buildExpiredBadge() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(color: Colors.red.shade100, borderRadius: BorderRadius.circular(8)),
-      child: Text('MİADI GEÇMİŞ', style: TextStyle(color: Colors.red.shade900, fontSize: 10, fontWeight: FontWeight.bold)),
-    );
-  }
-
-  // ignore: unused_element
-  Widget _buildMedicineInfo(IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Row(
-        children: [
-          Icon(icon, size: 14, color: const Color(0xFFEF9A9A)),
-          const SizedBox(width: 6),
-          Text('$label:', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.black54)),
-          const SizedBox(width: 6),
-          Expanded(child: Text(value, style: const TextStyle(fontSize: 13, color: Colors.black87))),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.inventory_2_outlined, size: 80, color: const Color(0xFFE53935).withOpacity(0.1)),
-          const SizedBox(height: 16),
-          const Text('Henüz tarama yapılmadı', style: TextStyle(color: Colors.grey, fontSize: 16)),
-        ],
-      ),
-    );
-  }
 }
-
-
-// ✅ CANLI TARAMA ESNASINDA KAREKODU BOYAYAN SINIF (GÜNCELLENMİŞ)
-class LiveBarcodePainter extends CustomPainter {
-  final List<Barcode> barcodes;
-  final Size? imageSize; 
-  final Map<String, Color> barcodeColors;
-  final Set<String> scannedBarcodes;
-  final BuildContext context;
-
-  LiveBarcodePainter({
-    required this.barcodes,
-    this.imageSize,
-    required this.barcodeColors,
-    required this.scannedBarcodes,
-    required this.context,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (imageSize == null || barcodes.isEmpty) return;
-
-    // 1. Dinamik Ölçekleme Hesabı
-    // Kamera görüntüsünün ekranı (BoxFit.cover gibi) tam doldurması için gereken oran.
-    // Artık inputWidth/inputHeight ayrımı yok, imageSize neyse o kabul edilir.
-    final double scaleX = size.width / imageSize!.width;
-    final double scaleY = size.height / imageSize!.height;
-    
-    // Görüntüyü ekranın en dar kenarına göre büyütüp boşluk bırakmamak için 'max' kullanıyoruz.
-    final double scale = scaleX > scaleY ? scaleX : scaleY;
-
-    // 2. Ortalama (Centering) Hesabı
-    // Görüntü ekrandan büyükse (cover olduğu için taşacaktır), 
-    // koordinatların kaymaması için bu taşma miktarını (offset) bulmalıyız.
-    final double offsetX = (size.width - imageSize!.width * scale) / 2;
-    final double offsetY = (size.height - imageSize!.height * scale) / 2;
-
-    for (final barcode in barcodes) {
-      final corners = barcode.corners;
-      final rawValue = barcode.rawValue;
-      if (corners == null || rawValue == null) continue;
-
-      Color baseColor = barcodeColors[rawValue] ?? Colors.greenAccent;
-
-      final paint = Paint()
-        ..style = PaintingStyle.fill
-        ..color = baseColor.withOpacity(0.3);
-
-      final borderPaint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3.0
-        ..color = baseColor;
-
-      // 3. Koordinat Dönüşümü
-      // Kameranın (0,0) noktası ile ekranın (0,0) noktasını scale ve offset ile eşitliyoruz.
-      final List<Offset> transformedCorners = corners.map((corner) {
-        return Offset(
-          (corner.dx * scale) + offsetX,
-          (corner.dy * scale) + offsetY,
-        );
-      }).toList();
-
-      final path = Path()..addPolygon(transformedCorners, true);
-      
-      canvas.drawPath(path, paint);
-      canvas.drawPath(path, borderPaint);
-
-      // --- Zaten taranmışsa çarpı (X) işareti çiz ---
-      if (scannedBarcodes.contains(rawValue) && transformedCorners.length >= 4) {
-        final crossPaint = Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 4.0
-          ..color = baseColor;
-          
-        canvas.drawLine(transformedCorners[0], transformedCorners[2], crossPaint);
-        canvas.drawLine(transformedCorners[1], transformedCorners[3], crossPaint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(LiveBarcodePainter oldDelegate) => true;
-}
-
-class QrBoxPainter extends CustomPainter {
-  final List<QrLookupResult> results;
-  final Size imageActualSize;
-
-  QrBoxPainter({required this.results, required this.imageActualSize});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (imageActualSize.width == 0 || imageActualSize.height == 0) return;
-
-    double scale = size.width / imageActualSize.width;
-    if (imageActualSize.height * scale > size.height) {
-      scale = size.height / imageActualSize.height;
-    }
-
-    final double renderedWidth = imageActualSize.width * scale;
-    final double renderedHeight = imageActualSize.height * scale;
-    final double offsetX = (size.width - renderedWidth) / 2;
-    final double offsetY = (size.height - renderedHeight) / 2;
-
-    for (var res in results) {
-      if (res.x == 0 && res.y == 0 && res.w == 0) continue;
-
-      final paint = Paint()
-        ..color = res.found ? Colors.teal.withOpacity(0.3) : Colors.red.withOpacity(0.3)
-        ..style = PaintingStyle.fill;
-
-      final borderPaint = Paint()
-        ..color = res.found ? Colors.teal : Colors.red
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0;
-
-      final rect = Rect.fromLTWH(
-        offsetX + (res.x * scale),
-        offsetY + (res.y * scale),
-        res.w * scale,
-        res.h * scale,
-      );
-
-      canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(4)), paint);
-      canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(4)), borderPaint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant QrBoxPainter oldDelegate) => true;
-}
-
-
-

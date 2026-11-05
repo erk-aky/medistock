@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../core/constants/validation_constants.dart';
 import 'auth_view_model.dart';
+import 'verification_code_form.dart';
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
@@ -14,10 +16,8 @@ class _RegisterPageState extends State<RegisterPage> {
   final _usernameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _codeController = TextEditingController(); // Onay kodu için
 
   final _formKey = GlobalKey<FormState>();
-  final _verifyFormKey = GlobalKey<FormState>();
 
   // Sayfa Durumu: false ise Kayıt, true ise Onay ekranı
   bool _showVerifyStep = false;
@@ -27,7 +27,6 @@ class _RegisterPageState extends State<RegisterPage> {
     _usernameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
-    _codeController.dispose();
     super.dispose();
   }
 
@@ -59,14 +58,9 @@ class _RegisterPageState extends State<RegisterPage> {
   }
 
   /// 2. ADIM: E-posta Doğrulama İşlemi
-  Future<void> _handleVerify() async {
-    if (!_verifyFormKey.currentState!.validate()) return;
-
+  Future<bool> _handleVerify(String code) async {
     final viewModel = context.read<AuthViewModel>();
-    final success = await viewModel.verifyCode(
-      _emailController.text.trim(),
-      _codeController.text.trim(),
-    );
+    final success = await viewModel.verifyCode(code);
 
     if (mounted) {
       if (success) {
@@ -82,6 +76,31 @@ class _RegisterPageState extends State<RegisterPage> {
         _showError(viewModel.error ?? 'Kod hatalı veya süresi dolmuş');
       }
     }
+    return success;
+  }
+
+  // Aynı bilgilerle yeni kod ister, önceki kod geçersiz olur
+  Future<bool> _handleResend() async {
+    final viewModel = context.read<AuthViewModel>();
+    final success = await viewModel.register(
+      _usernameController.text.trim(),
+      _emailController.text.trim(),
+      _passwordController.text.trim(),
+    );
+
+    if (!mounted) return success;
+    if (success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Yeni kod gönderildi, önceki kod artık geçersiz.'),
+          backgroundColor: Colors.green,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } else {
+      _showError(viewModel.error ?? 'Kod gönderilemedi');
+    }
+    return success;
   }
 
   void _showError(String message) {
@@ -136,7 +155,7 @@ class _RegisterPageState extends State<RegisterPage> {
           key: _formKey,
           child: Column(
             children: [
-              _customTextField(_usernameController, 'Kullanıcı Adı', Icons.person_outline),
+              _customTextField(_usernameController, 'Kullanıcı Adı', Icons.person_outline, isUsername: true),
               const SizedBox(height: 16),
               _customTextField(_emailController, 'E-posta Adresi', Icons.email_outlined, isEmail: true),
               const SizedBox(height: 16),
@@ -164,41 +183,16 @@ class _RegisterPageState extends State<RegisterPage> {
       children: [
         _buildHeader(Icons.mark_email_read_outlined, 'E-posta Doğrulama', '${_emailController.text} adresine gönderilen 6 haneli kodu giriniz.'),
         const SizedBox(height: 32),
-        Form(
-          key: _verifyFormKey,
-          child: Column(
-            children: [
-              TextFormField(
-                controller: _codeController,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 8),
-                decoration: InputDecoration(
-                  hintText: '000000',
-                  filled: true,
-                  fillColor: Colors.white,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(15),
-                    borderSide: BorderSide(color: const Color(0xFFFFCDD2)),
-                  ),
-                ),
-                keyboardType: TextInputType.number,
-                maxLength: 6,
-                validator: (v) => v!.length < 6 ? '6 haneli kodu girin' : null,
-              ),
-              const SizedBox(height: 40),
-              _buildMainButton(
-                onPressed: viewModel.isLoading ? null : _handleVerify,
-                text: 'Kodu Doğrula',
-                isLoading: viewModel.isLoading,
-              ),
-              const SizedBox(height: 24),
-              TextButton(
-                onPressed: () => setState(() => _showVerifyStep = false),
-                child: const Text("Bilgileri Düzenle / Geri Dön", style: TextStyle(color: Colors.grey)),
-              ),
-            ],
-          ),
+        VerificationCodeForm(
+          onVerify: _handleVerify,
+          onResend: _handleResend,
+          isLoading: viewModel.isLoading,
+          attemptsLeft: viewModel.codeAttemptsLeft,
+        ),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: () => setState(() => _showVerifyStep = false),
+          child: const Text("Bilgileri Düzenle / Geri Dön", style: TextStyle(color: Colors.grey)),
         ),
       ],
     );
@@ -242,11 +236,12 @@ class _RegisterPageState extends State<RegisterPage> {
     );
   }
 
-  Widget _customTextField(TextEditingController controller, String label, IconData icon, {bool isEmail = false, bool isPassword = false}) {
+  Widget _customTextField(TextEditingController controller, String label, IconData icon, {bool isEmail = false, bool isPassword = false, bool isUsername = false}) {
     return TextFormField(
       controller: controller,
       obscureText: isPassword,
       keyboardType: isEmail ? TextInputType.emailAddress : TextInputType.text,
+      inputFormatters: isUsername ? [UsernameSpaceFormatter()] : null,
       decoration: InputDecoration(
         labelText: label,
         prefixIcon: Icon(icon),
@@ -260,8 +255,9 @@ class _RegisterPageState extends State<RegisterPage> {
       ),
       validator: (v) {
         if (v!.isEmpty) return '$label gerekli';
-        if (isEmail && !v.contains('@')) return 'Geçerli bir e-posta girin';
-        if (isPassword && v.length < 4) return 'Şifre çok kısa';
+        if (isUsername) return validateUsername(v);
+        if (isEmail) return validateEmail(v);
+        if (isPassword && v.length < minPasswordLength) return 'Şifre en az $minPasswordLength karakter olmalıdır';
         return null;
       },
     );

@@ -1,21 +1,5 @@
 import 'package:flutter/material.dart';
 
-class QrLookupResponse {
-  final String? imageBase64; 
-  final List<QrLookupResult> results;
-
-  QrLookupResponse({this.imageBase64, required this.results});
-
-  factory QrLookupResponse.fromJson(Map<String, dynamic> json) {
-    return QrLookupResponse(
-      imageBase64: json['image'] as String?, 
-      results: (json['results'] as List? ?? [])
-          .map((i) => QrLookupResult.fromJson(i as Map<String, dynamic>))
-          .toList(),
-    );
-  }
-}
-
 class QrLookupResult {
   final String value; 
   final bool found;   
@@ -121,5 +105,53 @@ class QrData {
     final now = DateTime.now();
     final sixMonths = DateTime(now.year, now.month + 6, now.day);
     return expiryDate!.isBefore(sixMonths);
+  }
+}
+class QrLookupResultWithCount {
+  int? id;
+  final QrLookupResult qr;
+  final DateTime createdAt;
+  int count;
+  bool isOffline;
+
+  QrLookupResultWithCount({
+    this.id,
+    required this.qr,
+    DateTime? createdAt,
+    this.count = 1,
+    this.isOffline = false,
+  }) : createdAt = createdAt ?? DateTime.now().toUtc(); // Varsayılan UTC yapıldı
+
+  Map<String, dynamic> toJson() {
+    return {
+      'qr': qr.toJson(),
+      'count': count,
+      'isOffline': isOffline,
+      'createdAt': createdAt.toIso8601String(),
+    };
+  }
+
+  factory QrLookupResultWithCount.fromJson(Map<String, dynamic> json) {
+    final qrMap = json['qr'] as Map<String, dynamic>? ?? {};
+    final qr = QrLookupResult.fromJson(qrMap);
+
+    DateTime parsedCreatedAt;
+    try {
+      final raw = json['createdAt'];
+      if (raw is String && raw.isNotEmpty) {
+        parsedCreatedAt = DateTime.parse(raw).toUtc(); // UTC'ye zorla
+      } else {
+        parsedCreatedAt = DateTime.fromMillisecondsSinceEpoch(0).toUtc();
+      }
+    } catch (_) {
+      parsedCreatedAt = DateTime.fromMillisecondsSinceEpoch(0).toUtc();
+    }
+
+    return QrLookupResultWithCount(
+      qr: qr,
+      createdAt: parsedCreatedAt,
+      count: (json['count'] ?? 1) as int,
+      isOffline: (json['isOffline'] ?? false) as bool,
+    );
   }
 }

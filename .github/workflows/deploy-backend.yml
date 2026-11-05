@@ -1,0 +1,119 @@
+name: Deploy Backend (Windows/WSL)
+
+# main'e backend değişikliği push edilince testler koşar, geçerse sunucuda Docker ile deploy edilir.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'QrBackend/**'
+      - 'QrBackend.Tests/**'
+      - 'deployment/**'
+      - '.github/workflows/deploy-backend.yml'
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_SSH_USER }}
+  SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_PRIVATE_KEY }}
+  # Windows'un kendi SSH'ı 22'yi tutuyorsa WSL'e başka port yönlendirilir; secret yoksa 22.
+  SERVER_PORT: ${{ secrets.SERVER_SSH_PORT || '22' }}
+  DEPLOY_PATH: /opt/medistock
+
+jobs:
+  test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore QrBackend.Tests/QrBackend.Tests.csproj
+
+      - name: Build
+        run: dotnet build QrBackend.Tests/QrBackend.Tests.csproj -c Release --no-restore
+
+      - name: Test
+        run: dotnet test QrBackend.Tests/QrBackend.Tests.csproj -c Release --no-build --verbosity normal
+
+  deploy:
+    name: Deploy Backend to Server
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ ! -s ~/.ssh/deploy_key ]; then
+            echo "❌ SSH key is empty - check SERVER_SSH_PRIVATE_KEY secret"; exit 1
+          fi
+          printf '%s\n' \
+            "Host production" \
+            "  HostName $SERVER_HOST" \
+            "  Port $SERVER_PORT" \
+            "  User $SERVER_USER" \
+            "  IdentityFile ~/.ssh/deploy_key" \
+            "  StrictHostKeyChecking no" \
+            "  UserKnownHostsFile /dev/null" \
+            "  LogLevel ERROR" \
+            "  ConnectTimeout 30" \
+            "  ServerAliveInterval 15" \
+            "  ServerAliveCountMax 3" \
+            "  ControlMaster auto" \
+            "  ControlPath ~/.ssh/cm-%r@%h:%p" \
+            "  ControlPersist 300" \
+            > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          echo "✅ SSH configured for $SERVER_USER@$SERVER_HOST"
+
+      - name: Test SSH connection
+        run: ssh -o BatchMode=yes production "echo '✅ SSH connection successful'"
+
+      - name: Ensure directories exist
+        run: ssh production "mkdir -p ${DEPLOY_PATH}/QrBackend ${DEPLOY_PATH}/deployment/scripts ${DEPLOY_PATH}/deployment/config"
+
+      - name: Sync backend files
+        run: |
+          rsync -avz --delete --partial \
+            --exclude='bin' --exclude='obj' \
+            --exclude='publish_output' --exclude='output_result.jpg' \
+            --exclude='appsettings.json' --exclude='appsettings.Development.json' \
+            ./QrBackend/ production:${DEPLOY_PATH}/QrBackend/
+
+      - name: Sync deployment files
+        run: |
+          # --delete yok, sunucudaki config/.env.production asla silinmemeli.
+          rsync -avz --partial \
+            --exclude='.env.production' \
+            ./deployment/ production:${DEPLOY_PATH}/deployment/
+
+      # Şimdilik DB eski sunucuda, bağlantı bilgisi .env.production'dan okunur; Docker'a taşınırsa compose'a db servisi, buraya da Sql/ script'lerini çalıştıran adım eklenecek.
+
+      - name: Deploy backend on server
+        run: |
+          ssh production << EOF
+            set -e
+            chmod +x ${DEPLOY_PATH}/deployment/scripts/*.sh
+            ${DEPLOY_PATH}/deployment/scripts/deploy-server.sh
+          EOF
+
+      - name: Verify deployment
+        run: ssh production "docker ps --filter name=medistock_api_prod --format '{{.Names}}  {{.Status}}'"
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
+
+      - name: Summary
+        run: echo "✅ Backend deployment completed"

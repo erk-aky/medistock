@@ -238,7 +238,17 @@ class StockComparisonPage extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             ElevatedButton.icon(
-              onPressed: () => vm.exportComparisonReport(context),
+              onPressed: () async {
+                try {
+                  await vm.exportComparisonReport();
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text("Excel Hatası: ${e.toString()}")),
+                    );
+                  }
+                }
+              },
               icon: const Icon(Icons.ios_share_rounded, size: 20),
               label: const Text(
                 "ANALİZ RAPORUNU PAYLAŞ",
@@ -257,7 +267,16 @@ class StockComparisonPage extends StatelessWidget {
               onPressed: () async {
                 await vm.clearStockSession();
                 if (!context.mounted) return;
-                final loaded = await vm.pickExcelFile(context);
+                Map<String, int>? loaded;
+                try {
+                  loaded = await vm.pickExcelFile();
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text("Hata: $e"), backgroundColor: Colors.red),
+                    );
+                  }
+                }
                 if (!context.mounted) return;
                 if (loaded != null && loaded.isNotEmpty) {
                   Navigator.of(context).pop('show_summary');

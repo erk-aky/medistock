@@ -1,0 +1,9 @@
+bin/
+obj/
+publish_output/
+appsettings.json
+appsettings.Development.json
+appsettings.json.example
+output_result.jpg
+Dockerfile
+.dockerignore

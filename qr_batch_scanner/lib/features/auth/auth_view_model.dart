@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../core/network/api_client.dart';
 import '../../core/services/auth_service.dart';
 
 class AuthViewModel extends ChangeNotifier {
@@ -39,6 +40,12 @@ class AuthViewModel extends ChangeNotifier {
   String? _trialEndDate;
   String? get trialEndDate => _trialEndDate;
 
+  String? _registrationTicket;
+  String? _emailChangeTicket;
+
+  int? _codeAttemptsLeft;
+  int? get codeAttemptsLeft => _codeAttemptsLeft;
+
   static const _keyLoggedIn = 'isLoggedIn';
   static const _keyUsername = 'username';
   static const _keyEmail = 'userEmail'; 
@@ -46,7 +53,7 @@ class AuthViewModel extends ChangeNotifier {
 
   Future<void> loadSaved() async {
     final prefs = await SharedPreferences.getInstance();
-    _isLoggedIn = prefs.getBool(_keyLoggedIn) ?? false;
+    _isLoggedIn = await _authService.hasSession();
     userId = prefs.getInt(_keyUserId);
     _username = prefs.getString(_keyUsername);
     _email = prefs.getString(_keyEmail);
@@ -57,21 +64,23 @@ class AuthViewModel extends ChangeNotifier {
     notifyListeners(); 
     debugPrint("🔄 Veriler hafızadan yüklendi: ID: $userId, User: $_username");
     
-    if (_isLoggedIn && _username != null) {
-      await fetchAndUpdateProfile(_username!);
+    if (_isLoggedIn) {
+      await fetchAndUpdateProfile();
     }
   }
 
   /// ✅ YENİ: E-posta doğrulama kodunu gönderir
-  Future<bool> verifyCode(String email, String code) async {
+  Future<bool> verifyCode(String code) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
 
     try {
-      final resp = await _authService.verifyEmail(email, code);
+      final resp = await _authService.verifyEmail(_registrationTicket ?? '', code);
       _isLoading = false;
+      _codeAttemptsLeft = null;
       if (resp['success'] == true) {
+        _registrationTicket = null;
         notifyListeners();
         return true;
       } else {
@@ -80,6 +89,7 @@ class AuthViewModel extends ChangeNotifier {
         return false;
       }
     } catch (e) {
+      if (e is ApiException) _codeAttemptsLeft = e.remainingAttempts;
       _isLoading = false;
       _error = e.toString().replaceAll("Exception:", "");
       notifyListeners();
@@ -88,9 +98,9 @@ class AuthViewModel extends ChangeNotifier {
   }
 
   /// ✅ PROFİL ÇEKERKEN ID YAKALAMA
-  Future<void> fetchAndUpdateProfile(String username) async {
+  Future<void> fetchAndUpdateProfile() async {
     try {
-      final resp = await _authService.getUserProfile(username);
+      final resp = await _authService.getUserProfile();
 
       if (resp['success'] == true) {
         // backend'den gelen değerler
@@ -158,14 +168,12 @@ class AuthViewModel extends ChangeNotifier {
       final success = resp['success'] == true || resp['ok'] == true;
 
       if (success) {
-        final token = resp['token']?.toString();
         _trialEndDate = resp['trialEndDate']?.toString(); 
         
         // ID yakalama (Gelen loglara göre burayı revize edebiliriz)
         userId = resp['id'] ?? (resp['user'] != null ? resp['user']['id'] : null);
 
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool(_keyLoggedIn, true);
         await prefs.setString(_keyUsername, username);
         
         if (userId != null) {
@@ -188,10 +196,6 @@ class AuthViewModel extends ChangeNotifier {
           await prefs.setString('trialEndDate', _trialEndDate!);
         }
 
-        if (token != null) {
-          await prefs.setString(_keyToken, token);
-        }
-
         _isLoggedIn = true;
         _username = username;
         _isLoading = false;
@@ -212,53 +216,25 @@ class AuthViewModel extends ChangeNotifier {
     }
   }
 
-  /// ✅ GERÇEK DB GÜNCELLEMESİ (Hatasız ve Senkronize)
-  Future<bool> updateUserInfo({String? newUsername, String? newEmail}) async {
+  // Kullanıcı adını sunucuda günceller, başarılıysa telefondaki kaydı da yeniler
+  Future<bool> updateUsername(String newUsername) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
 
     try {
       final prefs = await SharedPreferences.getInstance();
+      final resp = await _authService.updateProfile(newUsername: newUsername);
 
-      // 1️⃣ ID’yi garantiye al
-      userId ??= prefs.getInt(_keyUserId);
+      if (resp['success'] == true) {
+        _username = newUsername;
+        await prefs.setString(_keyUsername, newUsername);
 
-      if (userId == null || userId == 0) {
-        debugPrint("❌ HATA: Kullanıcı ID hala bulunamadı! Prefs Key: $_keyUserId");
-        _error = "Kullanıcı kimliği bulunamadı. Lütfen tekrar giriş yapın.";
-        _isLoading = false;
-        notifyListeners();
-        return false;
-      }
-
-      debugPrint("🚀 Güncelleme isteği gönderiliyor: ID: $userId");
-
-      // 2️⃣ API isteği
-      final resp = await _authService.updateProfile(
-        userId: userId!,
-        newUsername: newUsername ?? _username ?? "",
-        newEmail: newEmail ?? _email ?? "",
-      );
-
-      if (resp['success'] == true || resp['ok'] == true) {
-        final updatedUsername = resp['username']?.toString() ?? newUsername ?? _username ?? "";
-        final updatedEmail = resp['email']?.toString() ?? newEmail ?? _email ?? "";
-
-        _username = updatedUsername;
-        _email = updatedEmail;
-
-        // prefs güncelle
-        await prefs.setString(_keyUsername, updatedUsername);
-        await prefs.setString(_keyEmail, updatedEmail);
-
-        // burada userId'nin prefs veya memory'de olduğundan emin ol
         userId ??= prefs.getInt(_keyUserId);
         if (userId != null) {
-          await prefs.setString('local_username_$userId', updatedUsername); // <<< EKLENDİ
+          await prefs.setString('local_username_$userId', newUsername);
         }
 
-        debugPrint("✅ Güncelleme başarılı (STATE + PREFS): $_username");
         _isLoading = false;
         notifyListeners();
         return true;
@@ -277,6 +253,55 @@ class AuthViewModel extends ChangeNotifier {
     }
   }
 
+  // Yeni adrese onay kodu gönderilmesini ister, tekrar gönderimde de aynı şekilde çağrılır
+  Future<bool> requestEmailChange(String newEmail) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final resp = await _authService.requestEmailChange(newEmail);
+      _emailChangeTicket = resp['ticket']?.toString();
+      _codeAttemptsLeft = null;
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _error = e.toString().replaceAll("Exception:", "");
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  // Kod doğruysa e-posta değişikliğini tamamlar ve yeni adresi telefona kaydeder
+  Future<bool> confirmEmailChange(String newEmail, String code) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      await _authService.confirmEmailChange(_emailChangeTicket ?? '', code);
+      _emailChangeTicket = null;
+      _codeAttemptsLeft = null;
+      _email = newEmail.trim().toLowerCase();
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_keyEmail, _email!);
+      await prefs.setString('email', _email!);
+
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      if (e is ApiException) _codeAttemptsLeft = e.remainingAttempts;
+      _error = e.toString().replaceAll("Exception:", "");
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
   Future<bool> register(String username, String email, String password) async {
     _isLoading = true;
     _error = null;
@@ -285,6 +310,8 @@ class AuthViewModel extends ChangeNotifier {
     try {
       final resp = await _authService.register(username, email, password);
       if (resp['success'] == true) {
+        _registrationTicket = resp['ticket']?.toString();
+        _codeAttemptsLeft = null;
         _isLoading = false;
         notifyListeners();
         return true;
@@ -320,7 +347,7 @@ class AuthViewModel extends ChangeNotifier {
     await prefs.remove('hasShownExpiredForever');
 
     try {
-      await _authService.clearSession();
+      await _authService.logout();
     } catch (e) {
       print('Logout Hatası: $e');
     }

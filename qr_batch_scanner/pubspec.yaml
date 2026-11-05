@@ -32,8 +32,6 @@ dependencies:
     sdk: flutter
   # State management
   provider: ^6.0.5
-  # Camera/photo picking (opens native camera UI)
-  image_picker: ^1.2.1
   # ML Kit barcode scanning (QR)
   shared_preferences: ^2.1.1
   google_mlkit_barcode_scanning: ^0.14.1
@@ -60,8 +58,17 @@ dependencies:
   vector_math: ^2.1.4
   excel: ^4.0.0
   file_picker: ^8.0.0
+  flutter_secure_storage: ^10.3.4
   # pubspec.yaml -> dependencies:
 
+
+# mobile_scanner'ın Android tarafı, hibrit (kare bazlı normal/ters alterne)
+# tarama moduna izin veren küçük bir yama ile burada vendor edilmiştir.
+# packages/mobile_scanner/android/.../MobileScanner.kt içindeki hybridMode
+# desteğine bakınız.
+dependency_overrides:
+  mobile_scanner:
+    path: packages/mobile_scanner
 
 dev_dependencies:
   flutter_test:
@@ -74,6 +81,8 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^5.0.0
   flutter_launcher_icons: ^0.14.4
+  flutter_native_splash: ^2.4.4
+  sqflite_common_ffi: ^2.4.0+3
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -124,5 +133,15 @@ flutter:
 flutter_launcher_icons:
   android: "launcher_icon"
   ios: true
-  image_path: "assets/medistock.jpeg" # İkonun tam yolu
+  image_path: "assets/uygulama-icon.png" # İkonun tam yolu
   min_sdk_android: 21 # İsteğe bağlı
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/uygulama-icon.png"
+  remove_alpha_ios: true
+
+flutter_native_splash:
+  color: "#FFFFFF"
+  image: "assets/uygulama-icon.png"
+  android_12:
+    image: "assets/uygulama-icon.png"
+    color: "#FFFFFF"

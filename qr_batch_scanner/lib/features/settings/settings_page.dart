@@ -6,6 +6,7 @@ import '../qr_scan/qr_scan_view_model.dart';
 import '../auth/login_page.dart';
 import 'account_details_page.dart';
 import '../auth/auth_view_model.dart';
+import '../../core/services/db_sync_service.dart';
 
 class SettingsPage extends StatelessWidget {
   final QrScanViewModel vm;
@@ -69,7 +70,7 @@ class SettingsPage extends StatelessWidget {
               // 4️⃣ 🔥 EKLEME: Backend’den en güncel profili çek ve VM’i güncelle
               if (usernameToFetch != null && usernameToFetch.isNotEmpty) {
                 try {
-                  await authVm.fetchAndUpdateProfile(usernameToFetch);
+                  await authVm.fetchAndUpdateProfile();
                 } catch (e) {
                   print("❌ Profil Çekme Başarısız: $e");
                   // Hata alsa bile sayfayı aç
@@ -142,6 +143,21 @@ class SettingsPage extends StatelessWidget {
           const Center(
             child: Text("Sürüm 1.0.2",
                 style: TextStyle(color: Colors.grey, fontSize: 12)),
+          ),
+          const SizedBox(height: 4),
+          Center(
+            child: FutureBuilder<int>(
+              future: DbSyncService().getLocalVersion(),
+              builder: (context, snapshot) {
+                final version = snapshot.data;
+                return Text(
+                  version == null
+                      ? "İlaç veritabanı sürümü: -"
+                      : "İlaç veritabanı sürümü: v$version",
+                  style: const TextStyle(color: Colors.grey, fontSize: 10),
+                );
+              },
+            ),
           ),
         ],
       ),
@@ -308,6 +324,7 @@ class SettingsPage extends StatelessWidget {
       
       // ViewModel üzerinden temizliği yap
       await authVm.logout();
+      if (!context.mounted) return;
 
       // Login sayfasına yönlendir ve tüm stack'i temizle
       Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);

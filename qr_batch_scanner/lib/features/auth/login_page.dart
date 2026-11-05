@@ -5,7 +5,7 @@ import '../../core/services/auth_service.dart';
 import 'auth_view_model.dart';
 import 'register_page.dart';
 import 'forgot_password_page.dart';
-import '../qr_scan/qr_scan_page.dart';
+import '../db_sync/db_sync_page.dart';
 import '../qr_scan/qr_scan_view_model.dart'; // ✅ 2. QrScanViewModel import edildi
 
 class LoginPage extends StatelessWidget {
@@ -184,12 +184,11 @@ class _LoginViewState extends State<_LoginView> {
                                   }
 
                                   // --- 3. QrScanViewModel’i tazeleyelim ---
-                                  if (context.mounted) {
-                                    context.read<QrScanViewModel>().loadSavedResults();
-                                  }
+                                  if (!context.mounted) return;
+                                  context.read<QrScanViewModel>().loadSavedResults();
 
                                   Navigator.of(context).pushReplacement(
-                                    MaterialPageRoute(builder: (_) => const QrScanPage()),
+                                    MaterialPageRoute(builder: (_) => const DbSyncPage()),
                                   );
                                 }
                               },

@@ -34,8 +34,24 @@ class LocalDbService {
       await File(path).writeAsBytes(bytes, flush: true);
     }
 
-    // Salt okunur modda açıyoruz (İlaç listesini sadece sorgulayacağız)
-    return await openDatabase(path, readOnly: true);
+    // Yazılabilir modda açıyoruz: backend senkronu ile içerik güncellenebilsin diye.
+    return await openDatabase(path);
+  }
+
+  /// Backend'den gelen güncel ilaç listesiyle tüm tabloyu tek bir transaction
+  /// içinde yeniden doldurur. İşlem yarıda kesilirse eski veri korunur.
+  Future<void> replaceAllData(List<Map<String, dynamic>> rows) async {
+    final db = await database;
+
+    await db.transaction((txn) async {
+      await txn.delete('filtreli_veriler');
+
+      final batch = txn.batch();
+      for (final row in rows) {
+        batch.insert('filtreli_veriler', row);
+      }
+      await batch.commit(noResult: true);
+    });
   }
 
   /// ✅ 13 haneli barkod ile sorgu yapan fonksiyon
@@ -46,16 +62,22 @@ class LocalDbService {
       
       // NOT: 'drugs' tablo adın, 'BARKOD' ise sütun adın.
       // DB Browser'da farklı yaptıysan burayı ona göre güncellemelisin.
-      List<Map<String, dynamic>> results = await db.query(
-        'filtreli_veriler', 
-        where: 'BARKOD = ?', 
-        whereArgs: [barcode],
-        limit: 1,
-      );
+      final candidates = [barcode];
+      if (barcode.length == 13) candidates.add('0$barcode');
+      if (barcode.length == 14 && barcode.startsWith('0')) candidates.add(barcode.substring(1));
 
-      if (results.isNotEmpty) {
-        print("✅ İlaç bulundu: ${results.first}");
-        return results.first;
+      for (final candidate in candidates) {
+        List<Map<String, dynamic>> results = await db.query(
+          'filtreli_veriler',
+          where: 'BARKOD = ?',
+          whereArgs: [candidate],
+          limit: 1,
+        );
+
+        if (results.isNotEmpty) {
+          print("✅ İlaç bulundu: ${results.first}");
+          return results.first;
+        }
       }
     } catch (e) {
       print("❌ LocalDbService Sorgu Hatası: $e");

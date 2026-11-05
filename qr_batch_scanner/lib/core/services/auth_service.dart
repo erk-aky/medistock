@@ -1,221 +1,126 @@
-import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants/api_constants.dart';
-import '../models/user_model.dart'; 
+import '../models/user_model.dart';
+import '../network/api_client.dart';
+import '../network/token_store.dart';
 
 class AuthService {
-  final String baseUrl = ApiConstants.baseUrl;
+  final ApiClient _api;
+  final TokenStore _tokens;
+
+  AuthService({ApiClient? apiClient, TokenStore? tokenStore})
+      : _api = apiClient ?? ApiClient(tokenStore: tokenStore),
+        _tokens = tokenStore ?? TokenStore.instance;
 
   /// ✅ YENİ: E-posta Doğrulama Kodunu Backend'e Gönderir
-  /// POST /api/auth/verify-email
-  Future<Map<String, dynamic>> verifyEmail(String email, String code) async {
-    final uri = Uri.parse('${ApiConstants.baseUrl}/api/auth/verify-email');
-    
-    final bodyJson = jsonEncode({
-      'email': email,
-      'code': code,
-    });
-
-    final resp = await http.post(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': 'true',
-      },
-      body: bodyJson,
-    ).timeout(const Duration(seconds: 15));
-
-    final Map<String, dynamic> decoded = jsonDecode(resp.body);
-
-    if (resp.statusCode == 200) {
-      return decoded;
-    } else {
-      throw Exception(decoded['message'] ?? 'Doğrulama kodu hatalı');
-    }
+  /// POST /api/v1/auth/verify-email
+  Future<Map<String, dynamic>> verifyEmail(String ticket, String code) async {
+    return _api.post(
+      ApiConstants.verifyEmail,
+      {'ticket': ticket, 'code': code},
+      timeout: const Duration(seconds: 15),
+    );
   }
 
-  /// ✅ Profil Bilgilerini Veritabanında Günceller
-  Future<Map<String, dynamic>> updateProfile({
-    required int userId,
-    required String newUsername,
-    required String newEmail,
-  }) async {
-    final uri = Uri.parse('${ApiConstants.baseUrl}/api/auth/update-profile');
-    
-    final bodyJson = jsonEncode({
-      'userId': userId,
-      'newUsername': newUsername,
-      'newEmail': newEmail,
-    });
+  // Kullanıcı adını sunucuda günceller
+  Future<Map<String, dynamic>> updateProfile({required String newUsername}) async {
+    final decoded = await _api.put(ApiConstants.updateProfile, {'newUsername': newUsername});
 
-    final resp = await http.put(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': 'true',
-      },
-      body: bodyJson,
-    ).timeout(const Duration(seconds: 10));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('username', newUsername);
 
-    final Map<String, dynamic> decoded = jsonDecode(resp.body);
+    return decoded;
+  }
 
-    if (resp.statusCode == 200) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('username', newUsername);
-      await prefs.setString('email', newEmail);
-      
-      return decoded;
-    } else {
-      throw Exception(decoded['message'] ?? 'Profil güncellenemedi');
-    }
+  // Yeni e-posta adresine onay kodu gönderilmesini ister
+  Future<Map<String, dynamic>> requestEmailChange(String newEmail) async {
+    return _api.post(ApiConstants.changeEmailRequest, {'newEmail': newEmail}, timeout: const Duration(seconds: 15));
+  }
+
+  // Onay koduyla e-posta değişikliğini tamamlar
+  Future<Map<String, dynamic>> confirmEmailChange(String ticket, String code) async {
+    return _api.post(ApiConstants.changeEmailConfirm, {'ticket': ticket, 'code': code}, timeout: const Duration(seconds: 15));
   }
 
   /// ✅ Backend'den Güncel Profil Bilgilerini Çeker
-  Future<Map<String, dynamic>> getUserProfile(String username) async {
-    final uri = Uri.parse('${ApiConstants.baseUrl}/api/auth/profile/$username');
+  Future<Map<String, dynamic>> getUserProfile() async {
+    final decoded = await _api.get(ApiConstants.me);
 
-    final resp = await http.get(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': 'true',
-      },
-    ).timeout(const Duration(seconds: 10));
+    final prefs = await SharedPreferences.getInstance();
+    if (decoded['email'] != null) await prefs.setString('email', decoded['email']);
+    if (decoded['subscriptionStatus'] != null) await prefs.setString('subscriptionStatus', decoded['subscriptionStatus']);
+    if (decoded['trialEndDate'] != null) await prefs.setString('trialEndDate', decoded['trialEndDate']);
+    if (decoded['subscriptionEndDate'] != null) await prefs.setString('subscriptionEndDate', decoded['subscriptionEndDate']);
+    if (decoded['id'] != null) await prefs.setInt('userId', decoded['id']);
 
-    if (resp.statusCode == 200) {
-      final Map<String, dynamic> decoded = jsonDecode(resp.body);
-      
-      final prefs = await SharedPreferences.getInstance();
-      if (decoded['email'] != null) await prefs.setString('email', decoded['email']);
-      if (decoded['subscriptionStatus'] != null) await prefs.setString('subscriptionStatus', decoded['subscriptionStatus']);
-      if (decoded['trialEndDate'] != null) await prefs.setString('trialEndDate', decoded['trialEndDate']);
-      if (decoded['subscriptionEndDate'] != null) await prefs.setString('subscriptionEndDate', decoded['subscriptionEndDate']);
-      if (decoded['id'] != null) await prefs.setInt('userId', decoded['id']);
-      
-      return decoded;
-    } else {
-      throw Exception('Profil bilgileri alınamadı');
-    }
+    return decoded;
   }
 
-  /// POST /api/auth/login
+  /// POST /api/v1/auth/login
   Future<Map<String, dynamic>> login(String username, String password) async {
-    final uri = Uri.parse(ApiConstants.login);
-    final bodyJson = jsonEncode({'usernameOrEmail': username, 'password': password});
+    final decoded = await _api.post(ApiConstants.login, {'usernameOrEmail': username, 'password': password});
 
-    final resp = await http.post(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': 'true',
-      },
-      body: bodyJson,
-    ).timeout(const Duration(seconds: 10));
+    await _tokens.save(decoded['accessToken'].toString(), decoded['refreshToken'].toString());
 
-    final Map<String, dynamic> decoded = jsonDecode(resp.body);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('username', decoded['username'] ?? username);
+    await prefs.setString('email', decoded['email'] ?? '');
+    if (decoded['id'] != null) await prefs.setInt('userId', decoded['id']);
 
-    if (resp.statusCode == 200) {
-      final prefs = await SharedPreferences.getInstance();
-      
-      await prefs.setBool('isLoggedIn', true);
-      await prefs.setString('username', decoded['username'] ?? username);
-      await prefs.setString('email', decoded['email'] ?? '');
-      if (decoded['id'] != null) await prefs.setInt('userId', decoded['id']);
-      
-      await prefs.setString('subscriptionStatus', decoded['subscriptionStatus'] ?? 'None');
-      if (decoded['trialEndDate'] != null) await prefs.setString('trialEndDate', decoded['trialEndDate']);
-      if (decoded['subscriptionEndDate'] != null) await prefs.setString('subscriptionEndDate', decoded['subscriptionEndDate']);
+    await prefs.setString('subscriptionStatus', decoded['subscriptionStatus'] ?? 'None');
+    if (decoded['trialEndDate'] != null) await prefs.setString('trialEndDate', decoded['trialEndDate']);
+    if (decoded['subscriptionEndDate'] != null) await prefs.setString('subscriptionEndDate', decoded['subscriptionEndDate']);
 
-      final token = (decoded['token'] ?? decoded['authToken'])?.toString();
-      if (token != null) {
-        await prefs.setString('authToken', token);
-        await prefs.setString('token', token);
-      }
-
-      return decoded;
-    } else {
-      // Backend'den gelen spesifik hata mesajını (örneğin: "Email onaylanmadı") fırlatır
-      throw Exception(decoded['message'] ?? 'Giriş başarısız');
-    }
+    return decoded;
   }
 
-  /// POST /api/auth/register
+  /// POST /api/v1/auth/register
   Future<Map<String, dynamic>> register(String username, String email, String password) async {
-    final uri = Uri.parse(ApiConstants.register);
-    final bodyJson = jsonEncode({
+    return _api.post(ApiConstants.register, {
       'username': username,
       'email': email,
       'password': password,
     });
-
-    final resp = await http.post(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': 'true',
-      },
-      body: bodyJson,
-    ).timeout(const Duration(seconds: 10));
-    
-    final Map<String, dynamic> decoded = jsonDecode(resp.body);
-    if (resp.statusCode == 200) {
-      return decoded;
-    } else {
-      throw Exception(decoded['message'] ?? 'Kayıt başarısız');
-    }
   }
 
   /// 1. Adım: Şifremi Unuttum
   Future<Map<String, dynamic>> forgotPassword(String email) async {
-    final uri = Uri.parse('${ApiConstants.baseUrl}/api/auth/forgot-password');
-    final bodyJson = jsonEncode({'email': email});
-
-    final resp = await http.post(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': 'true',
-      },
-      body: bodyJson,
-    ).timeout(const Duration(seconds: 15));
-
-    final Map<String, dynamic> decoded = jsonDecode(resp.body);
-    if (resp.statusCode == 200) {
-      return decoded;
-    } else {
-      throw Exception(decoded['message'] ?? 'Kod gönderilemedi');
-    }
+    return _api.post(
+      ApiConstants.forgotPassword,
+      {'email': email},
+      timeout: const Duration(seconds: 15),
+    );
   }
 
   /// 2. Adım: Yeni Şifreyi Kaydet
   Future<Map<String, dynamic>> resetPassword(String email, String code, String newPassword) async {
-    final uri = Uri.parse('${ApiConstants.baseUrl}/api/auth/reset-password');
-    final bodyJson = jsonEncode({
-      'email': email,
-      'code': code,
-      'newPassword': newPassword,
-    });
+    return _api.post(
+      ApiConstants.resetPassword,
+      {'email': email, 'code': code, 'newPassword': newPassword},
+      timeout: const Duration(seconds: 15),
+    );
+  }
 
-    final resp = await http.post(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': 'true',
-      },
-      body: bodyJson,
-    ).timeout(const Duration(seconds: 15));
+  // Telefonda geçerli bir oturum olup olmadığını döner
+  Future<bool> hasSession() => _tokens.hasSession();
 
-    final Map<String, dynamic> decoded = jsonDecode(resp.body);
-    if (resp.statusCode == 200) {
-      return decoded;
-    } else {
-      throw Exception(decoded['message'] ?? 'Şifre güncellenemedi');
+  // Sunucudaki oturumu kapatmayı dener, sonuç ne olursa olsun telefondaki oturumu siler
+  Future<void> logout() async {
+    final refreshToken = await _tokens.refreshToken;
+    if (refreshToken != null) {
+      try {
+        await _api.post(ApiConstants.logout, {'refreshToken': refreshToken}, timeout: const Duration(seconds: 10));
+      } on ApiException catch (e) {
+        debugPrint('Sunucudaki oturum kapatılamadı: $e');
+      }
     }
+    await clearSession();
   }
 
   /// Oturumu kapatır
   Future<void> clearSession() async {
+    await _tokens.clear();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('isLoggedIn');
     await prefs.remove('username');
@@ -238,11 +143,11 @@ class AuthService {
       username: username,
       email: prefs.getString('email') ?? '',
       subscriptionStatus: prefs.getString('subscriptionStatus') ?? 'None',
-      trialEndDate: prefs.getString('trialEndDate') != null 
-          ? DateTime.tryParse(prefs.getString('trialEndDate')!) 
+      trialEndDate: prefs.getString('trialEndDate') != null
+          ? DateTime.tryParse(prefs.getString('trialEndDate')!)
           : null,
-      subscriptionEndDate: prefs.getString('subscriptionEndDate') != null 
-          ? DateTime.tryParse(prefs.getString('subscriptionEndDate')!) 
+      subscriptionEndDate: prefs.getString('subscriptionEndDate') != null
+          ? DateTime.tryParse(prefs.getString('subscriptionEndDate')!)
           : null,
     );
   }
